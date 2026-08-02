@@ -336,6 +336,66 @@ def test_main_empty_data_auto_full_crawl(env, monkeypatch, capsys):
     assert "自动全量爬取" in capsys.readouterr().out
 
 
+def test_main_empty_data_full_crawl_still_analyzes(env, monkeypatch, capsys):
+    # 数据为空 → 全量爬取后 last_crawl 被更新为当前时刻，
+    # 刚爬下来的帖子（created 早于此刻）不应被 since 过滤掉，必须照常分析并出报告。
+    monkeypatch.setattr(
+        analyzer,
+        "load_config",
+        lambda: {"sources": {"v2ex": {"enabled": True, "nodes": ["python"]}}, "llm": {}},
+    )
+    monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "[#1] 洞察")
+
+    def fake_run_crawl(config, source_name=None, today=False):
+        # 模拟真实爬虫：写入帖子文件，并把 last_crawl 置为当前时刻
+        _make_post_file(analyzer.DATA_DIR / "v2ex" / "python", _post(1))
+        state = analyzer.load_state()
+        state.setdefault("v2ex", {})["last_crawl"] = int(analyzer.time.time())
+        analyzer.save_state(state)
+        return 1
+
+    monkeypatch.setattr(analyzer, "run_crawl", fake_run_crawl)
+    rc = analyzer.main([])
+    assert rc == 0
+    report = (analyzer.REPORT_DIR / "analysis_today.md").read_text(encoding="utf-8")
+    assert "基于 1 个帖子自动生成" in report
+    assert "没有新增帖子" not in capsys.readouterr().out
+
+
+def test_main_mixed_empty_source_still_analyzes(env, monkeypatch, capsys):
+    # 来源 a 已有数据与 last_analysis，来源 b 为空：b 被全量爬取后 last_crawl=当前时刻，
+    # b 刚爬下来的帖子（created 早于此刻）不应被 since 过滤掉；a 仍按增量处理。
+    monkeypatch.setattr(
+        analyzer,
+        "load_config",
+        lambda: {
+            "sources": {
+                "a": {"enabled": True, "nodes": ["x"]},
+                "b": {"enabled": True, "nodes": ["y"]},
+            },
+            "llm": {},
+        },
+    )
+    monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "[#1] 洞察")
+    _make_post_file(analyzer.DATA_DIR / "a" / "x", _post(1))  # a 已有数据
+    analyzer.save_state({"a": {"last_crawl": 100, "last_analysis": 200}})  # a 增量点
+
+    def fake_run_crawl(config, source_name=None, today=False):
+        # 只给空的来源 b 写帖子，并把 last_crawl 置为当前时刻；a 不新增
+        _make_post_file(analyzer.DATA_DIR / "b" / "y", _post(2))
+        st = analyzer.load_state()
+        st.setdefault("b", {})["last_crawl"] = int(analyzer.time.time())
+        analyzer.save_state(st)
+        return 1
+
+    monkeypatch.setattr(analyzer, "run_crawl", fake_run_crawl)
+    rc = analyzer.main([])
+    assert rc == 0
+    report = (analyzer.REPORT_DIR / "analysis_today.md").read_text(encoding="utf-8")
+    assert "基于 1 个帖子自动生成" in report  # 只有 b 的新帖被分析，a 无新增
+    assert "没有新增帖子" not in capsys.readouterr().out
+
+
 def test_main_no_topics(env, monkeypatch, capsys):
     monkeypatch.setattr(analyzer, "load_config", lambda: {"sources": {"v2ex": {"enabled": True}}, "llm": {}})
     monkeypatch.setattr(analyzer, "run_crawl", lambda *a, **kw: 0)

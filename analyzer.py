@@ -202,8 +202,10 @@ def build_batch_prompt(batch_text: str, idx: int, total: int, title: str, desc: 
 
 定义：{desc}
 
-要求：
+规则：
+- 直接输出条目列表，不加总标题
 - 只输出这一类，不要输出其他类别
+- 如果没有符合定义的信息，输出「无」
 - 不要限制条数，尽可能多地提炼有价值的信息
 - 每条用 `[#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
 - 用中文回答
@@ -216,9 +218,10 @@ def build_batch_prompt(batch_text: str, idx: int, total: int, title: str, desc: 
 def build_merge_prompt(results: list[str], incremental: bool) -> str:
     note = "（本次为今日新增分析）" if incremental else ""
     body = "\n\n---\n\n".join(results)
-    return f"""以下是多批次的分析结果，请合并去重，输出一份最终报告{note}。
+    return f"""以下是多批次的分析结果，请合并去重，输出条目列表{note}。
 
-要求：
+规则：
+- 直接输出条目列表，不加总标题
 - 去除重复条目，保留最有代表性的描述
 - 不要限制条数，尽可能保留所有有价值的信息
 - 每条保留 `[#帖子ID]` 来源标注，不得删除或改写
@@ -231,8 +234,15 @@ def build_merge_prompt(results: list[str], incremental: bool) -> str:
 # ---------- 合并与链接还原 ----------
 
 
+def is_empty_result(text: str) -> bool:
+    """批次分析结果是否为空（LLM 按指令输出「无」或没输出内容）。"""
+    t = text.strip().rstrip("。.!！")
+    return not t or t in {"无", "没有"}
+
+
 def merge_results(results: list[str], incremental: bool) -> str:
     """层级合并：每 MERGE_SIZE 个一组，递归直到只剩 1 个结果。"""
+    results = [r for r in results if not is_empty_result(r)]
     if not results:
         return ""
     if len(results) == 1:
@@ -301,7 +311,9 @@ def analyze(topics: list[Post], incremental: bool = False) -> dict[str, str]:
             for key, title, desc in CATEGORIES:
                 futures.append((ex.submit(analyze_category, bi, batch_text, key, title, desc), key))
         for fut, key in futures:
-            per_key[key].append(fut.result())
+            batch_result = fut.result()
+            if not is_empty_result(batch_result):
+                per_key[key].append(batch_result)
 
         # 各类别独立层级合并（并行）
         merged_raw = {
@@ -347,7 +359,8 @@ def build_report(merged: dict[str, str], total: int, summary: str) -> str:
         "",
     ]
     for title, text in merged.items():
-        lines += [f"## {title}", "", text.strip(), ""]
+        content = text.strip() or "本轮未发现相关信息"
+        lines += [f"## {title}", "", content, ""]
     return "\n".join(lines)
 
 
@@ -375,13 +388,15 @@ def _enabled_sources(config: dict[str, Any]) -> list[str]:
     return [name for name, conf in config.get("sources", {}).items() if conf.get("enabled", True)]
 
 
+def _source_has_data(name: str) -> bool:
+    """某来源目录下是否存在任何帖子 JSON。"""
+    source_dir = DATA_DIR / name
+    return source_dir.is_dir() and any(source_dir.rglob("*.json"))
+
+
 def _has_data(config: dict[str, Any]) -> bool:
     """配置的 enabled 来源下是否存在任何帖子 JSON。"""
-    for name in _enabled_sources(config):
-        source_dir = DATA_DIR / name
-        if source_dir.is_dir() and any(source_dir.rglob("*.json")):
-            return True
-    return False
+    return any(_source_has_data(name) for name in _enabled_sources(config))
 
 
 def _load_topics(
@@ -424,25 +439,28 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config()
     _LLM.update(resolve_llm_config(config))
 
-    # 自动爬取：数据为空时重置该来源状态，让增量爬取退化为全量；否则只抓新增
-    if not _has_data(config):
-        state = load_state()
-        for name in _enabled_sources(config):
+    # 自动爬取：某来源数据为空时重置其状态，让增量爬取退化为全量；否则只抓新增。
+    # 记录 freshly_full —— 该来源刚被全量爬取，last_crawl 已被更新为当前时刻，
+    # 若仍以其为 since，刚爬下来的帖子（created 均早于此刻）会被全部过滤掉。
+    state = load_state()
+    freshly_full: set[str] = set()
+    for name in _enabled_sources(config):
+        if not _source_has_data(name):
+            freshly_full.add(name)
             state.pop(name, None)
+    if freshly_full:
         save_state(state)
         print("首次运行或数据为空，自动全量爬取 ...")
     run_crawl(config, today=True)
 
     # 加载待分析帖子
     state = load_state()
-    since_by_source: dict[str, int | None]
-    if args.full:
-        since_by_source = {name: None for name in _enabled_sources(config)}
-    else:
-        since_by_source = {
-            name: state.get(name, {}).get("last_analysis") or state.get(name, {}).get("last_crawl")
-            for name in _enabled_sources(config)
-        }
+    since_by_source: dict[str, int | None] = {}
+    for name in _enabled_sources(config):
+        if args.full or name in freshly_full:
+            since_by_source[name] = None
+        else:
+            since_by_source[name] = state.get(name, {}).get("last_analysis") or state.get(name, {}).get("last_crawl")
     incremental = not args.full
     topics, source_nodes = _load_topics(config, since_by_source)
 
