@@ -1,0 +1,32 @@
+{
+  "sources": {
+    "v2ex": {
+      "enabled": true,
+      "nodes": [
+        "programmer",
+        "python",
+        "create",
+        "share",
+        "qna",
+        "tool",
+        "996",
+        "geek",
+        "quant",
+        "ai2you",
+        "prompts",
+        "openrouter",
+        "grok",
+        "glm",
+        "ollama",
+        "imagine"
+      ],
+      "pages_per_node": 6,
+      "request_delay": 1.2,
+      "max_retries": 3
+    }
+  },
+  "llm": {
+    "base_url": "https://api.deepseek.com/v1",
+    "model": "deepseek-v4-flash"
+  }
+}

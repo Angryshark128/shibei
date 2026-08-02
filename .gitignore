@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+
+# 环境与工具
+.env
+.env.*
+.python-version
+
+# 运行时数据：抓取结果与缓存（不入库）
+data/
+
+# 编辑器/系统
+.DS_Store
+.idea/
+.vscode/
+*.swp

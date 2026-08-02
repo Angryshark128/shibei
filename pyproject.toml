@@ -1,0 +1,54 @@
+[project]
+name = "shibei"
+version = "0.1.0"
+description = "拾贝：从社区抓取帖子，调用 LLM 提炼创意、痛点、独立开发者机会、趋势洞察"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+keywords = ["crawler", "llm", "community", "insight", "v2ex", "openai", "openai-compatible"]
+authors = [{ name = "拾贝 contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/<your-org>/shibei"
+Repository = "https://github.com/<your-org>/shibei"
+Documentation = "https://github.com/<your-org>/shibei#readme"
+Changelog = "https://github.com/<your-org>/shibei/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8.0",
+    "pyright>=1.1.390",
+    "pre-commit>=4.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+# JSON 由 Python 的 json 模块解析，保持合法 JSON（ruff 的 JSONC 尾逗号风格会破坏 json.load）
+extend-exclude = ["*.json"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
