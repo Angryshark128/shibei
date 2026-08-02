@@ -89,13 +89,13 @@
 |---|---|---|
 | `OPENAI_API_KEY` | 是 | LLM API Key（仅环境变量，不入库） |
 | `OPENAI_BASE_URL` | 是 | OpenAI 兼容 API 地址（环境变量或 config.json `llm.base_url` 二选一） |
-| `ANALYZE_MODEL` | 否 | 模型名（config.json `llm.model` → 默认 `gpt-4o-mini`） |
+| `ANALYZE_MODEL` | 是 | 模型名（环境变量或 config.json `llm.model` 二选一；不同厂商支持的模型各不相同，无内置默认） |
 | `ANALYZE_MAX_TOKENS` | 否 | 单次输出上限（config.json `llm.max_tokens` → 默认 `4096`；个别厂商上限更低需调小） |
 
 设计要点：
 
-- **优先级：环境变量 > config.json > 内置默认**（Key/URL 无默认，缺失即退出）。
-- **URL 与 Key 均必填**：缺失时打印配置说明并退出，避免用户忘了配 URL 误发到 OpenAI 官方端点。
+- **优先级：环境变量 > config.json**（Key / URL / 模型均无内置默认，缺失即退出）。
+- **URL、Key、模型均必填**：缺失时打印配置说明并退出，避免误发到错误的端点或模型（如 DeepSeek 不支持 `gpt-4o-mini` 会返回 400）。
 - API Key 不写入配置文件、不硬编码、不提交仓库。
 - 兼容任何 OpenAI 协议的 API：DeepSeek、OpenRouter、Ollama、vLLM 等。
 

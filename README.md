@@ -33,9 +33,12 @@ V2EX (或其他社区) ──爬取──▶ data/{source}/{node}/{id}.json ─�
 # 1. 安装（零运行时依赖，仅 dev 工具）
 uv sync
 
-# 2. 配置 LLM（用户自带 URL + Key）
+# 2. 配置 LLM（用户自带 URL + Key + 模型，三者必填）
 export OPENAI_API_KEY=sk-xxx
-# 可选：OPENAI_BASE_URL 默认取 config.json 的 llm.base_url
+# 下面的 base_url / model 默认取 config.json 的 llm 节，也可用环境变量覆盖：
+#   export OPENAI_BASE_URL=https://api.deepseek.com/v1
+#   export ANALYZE_MODEL=deepseek-v4-flash
+# 常用服务商组合见「常用 OpenAI 协议 API 示例」
 
 # 3. 分析（唯一入口：自动爬取 + 分析 + 打印报告路径）
 uv run python analyzer.py
@@ -84,8 +87,33 @@ uv run python analyzer.py --full
 |---|---|---|
 | `OPENAI_API_KEY` | ✅ | LLM API Key，仅环境变量，不入库 |
 | `OPENAI_BASE_URL` | ✅ | API 地址（或用 config.json 的 `llm.base_url`） |
-| `ANALYZE_MODEL` | | 模型名（默认取 `llm.model`，兜底 `gpt-4o-mini`） |
+| `ANALYZE_MODEL` | ✅ | 模型名（或用 config.json 的 `llm.model`），无内置默认 |
 | `ANALYZE_MAX_TOKENS` | | 单次输出上限（默认取 `llm.max_tokens`，兜底 4096） |
+
+### 常用 OpenAI 协议 API 示例
+
+拾贝只要求接口兼容 OpenAI 协议，服务商任选。URL 与模型名都随厂商而变，以下为常见组合（**模型名以服务商文档为准**，填错会收到 400 `model not found` 之类报错）：
+
+| 服务商 | `base_url` | 示例 `model` |
+|---|---|---|
+| OpenAI 官方 | `https://api.openai.com/v1` | `gpt-4o`、`gpt-4o-mini` |
+| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat`、`deepseek-reasoner`（部分环境为 `deepseek-v4-pro` / `deepseek-v4-flash`） |
+| OpenRouter | `https://openrouter.ai/api/v1` | `openai/gpt-4o`、`anthropic/claude-3.5-sonnet` |
+| Moonshot（Kimi） | `https://api.moonshot.cn/v1` | `moonshot-v1-8k`、`kimi-k2-0711-preview` |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | `glm-4-flash`、`glm-4-plus` |
+| 通义千问（DashScope） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `qwen-plus`、`qwen-turbo` |
+| 硅基流动（SiliconFlow） | `https://api.siliconflow.cn/v1` | `deepseek-ai/DeepSeek-V3`、`Qwen/Qwen2.5-72B-Instruct` |
+| Ollama（本地） | `http://localhost:11434/v1` | `llama3.1`、`qwen2.5` |
+| vLLM / LiteLLM（自部署） | `http://localhost:8000/v1` 等 | 以部署的模型为准 |
+
+例如用 DeepSeek：
+
+```bash
+export OPENAI_API_KEY=sk-xxx
+export OPENAI_BASE_URL=https://api.deepseek.com/v1
+export ANALYZE_MODEL=deepseek-v4-flash
+uv run python analyzer.py
+```
 
 ## 数据与报告
 

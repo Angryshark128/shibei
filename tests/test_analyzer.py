@@ -36,6 +36,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(analyzer, "REPORT_DIR", tmp_path / "data" / "analysis")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://fake/v1")  # URL 必填
+    monkeypatch.setenv("ANALYZE_MODEL", "test-model")  # 模型必填
     return tmp_path
 
 
@@ -174,6 +175,17 @@ def test_resolve_llm_config_url_required(monkeypatch):
     # URL 未提供 → 必须显式配置，缺失即退出
     with pytest.raises(SystemExit):
         analyzer.resolve_llm_config({})
+    # URL 有了但模型缺失 → 也要退出
+    with pytest.raises(SystemExit):
+        analyzer.resolve_llm_config({"llm": {"base_url": "https://cfg.example/v1"}})
+
+
+def test_resolve_llm_config_model_required(monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("ANALYZE_MODEL", raising=False)
+    with pytest.raises(SystemExit):
+        analyzer.resolve_llm_config({"llm": {"base_url": "https://cfg.example/v1"}})
+    # 模型缺省不再兜底 gpt-4o-mini
 
 
 def test_resolve_llm_config_priority(monkeypatch):
@@ -181,7 +193,7 @@ def test_resolve_llm_config_priority(monkeypatch):
     monkeypatch.delenv("ANALYZE_MODEL", raising=False)
     monkeypatch.delenv("ANALYZE_MAX_TOKENS", raising=False)
 
-    # config.json 提供 URL；model / max_tokens 显式
+    # config.json 提供 URL / model / max_tokens
     cfg = {"llm": {"base_url": "https://cfg.example/v1/", "model": "cfg-model", "max_tokens": 2048}}
     assert analyzer.resolve_llm_config(cfg) == {
         "base_url": "https://cfg.example/v1",
@@ -189,10 +201,10 @@ def test_resolve_llm_config_priority(monkeypatch):
         "max_tokens": "2048",
     }
 
-    # model / max_tokens 可选，兜底默认
-    assert analyzer.resolve_llm_config({"llm": {"base_url": "https://cfg.example/v1"}}) == {
+    # max_tokens 可选，兜底默认
+    assert analyzer.resolve_llm_config({"llm": {"base_url": "https://cfg.example/v1", "model": "m"}}) == {
         "base_url": "https://cfg.example/v1",
-        "model": "gpt-4o-mini",
+        "model": "m",
         "max_tokens": "4096",
     }
 

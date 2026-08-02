@@ -46,7 +46,7 @@ CATEGORIES = [
 LINK_RE = re.compile(r"\[#([^\]]+)\]")
 
 # LLM 配置（main 里从 config/环境变量解析后填充），call_api 读取
-_LLM: dict[str, str] = {"base_url": "", "model": "gpt-4o-mini", "max_tokens": "4096"}
+_LLM: dict[str, str] = {"base_url": "", "model": "", "max_tokens": "4096"}
 
 
 # ---------- 配置 / 状态 ----------
@@ -84,8 +84,8 @@ def load_json(path: Path) -> Any:
 def resolve_llm_config(config: dict[str, Any]) -> dict[str, str]:
     """解析 LLM 配置。
 
-    URL 必填（环境变量 OPENAI_BASE_URL 或 config.json 的 llm.base_url 二选一），
-    缺失即退出，避免未配置时误发到 OpenAI 官方端点。model 可选，兜底 gpt-4o-mini。
+    URL 与模型均必填（环境变量或 config.json 二选一），缺失即退出——
+    避免误发到错误的端点或模型。max_tokens 可选，兜底 4096。
     """
     base_url = os.environ.get("OPENAI_BASE_URL") or config.get("llm", {}).get("base_url")
     if not base_url:
@@ -95,7 +95,14 @@ def resolve_llm_config(config: dict[str, Any]) -> dict[str, str]:
             "  export OPENAI_BASE_URL=https://api.deepseek.com/v1\n"
             "  或写入 config.json 的 llm.base_url"
         )
-    model = os.environ.get("ANALYZE_MODEL") or config.get("llm", {}).get("model") or "gpt-4o-mini"
+    model = os.environ.get("ANALYZE_MODEL") or config.get("llm", {}).get("model")
+    if not model:
+        raise SystemExit(
+            "未设置 ANALYZE_MODEL。\n"
+            "拾贝需要指定模型名（不同厂商支持的模型各不相同）：\n"
+            "  export ANALYZE_MODEL=deepseek-v4-flash\n"
+            "  或写入 config.json 的 llm.model"
+        )
     max_tokens = str(os.environ.get("ANALYZE_MAX_TOKENS") or config.get("llm", {}).get("max_tokens") or "4096")
     return {"base_url": base_url.rstrip("/"), "model": model, "max_tokens": max_tokens}
 
@@ -105,13 +112,13 @@ def check_env() -> str:
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         print("未设置 OPENAI_API_KEY。", file=sys.stderr)
-        print("拾贝使用 OpenAI 兼容 API，请自行提供 base_url 和 api_key：", file=sys.stderr)
+        print("拾贝使用 OpenAI 兼容 API，请自行提供 base_url、api_key 与模型名：", file=sys.stderr)
         print("  export OPENAI_API_KEY=sk-xxx   # 必填", file=sys.stderr)
         print(
             "  export OPENAI_BASE_URL=https://api.deepseek.com/v1   # 必填（或用 config.json 的 llm.base_url）",
             file=sys.stderr,
         )
-        print("  export ANALYZE_MODEL=...       # 可选，默认 gpt-4o-mini", file=sys.stderr)
+        print("  export ANALYZE_MODEL=deepseek-v4-flash   # 必填（或用 config.json 的 llm.model）", file=sys.stderr)
         raise SystemExit(1)
     return api_key
 
