@@ -1,7 +1,7 @@
 [project]
 name = "shibei"
 version = "0.1.0"
-description = "拾贝：从社区抓取帖子，调用 LLM 提炼创意、痛点、独立开发者机会、趋势洞察"
+description = "拾贝：面向独立开发者的社区情报工具——抓取社区帖子，用 LLM 提炼创意、痛点、独立开发机会与趋势"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"

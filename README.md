@@ -1,10 +1,32 @@
 # 拾贝
 
-从社区论坛抓取帖子，调用 LLM 提炼**创意 / 痛点 / 独立开发者机会 / 趋势洞察**，输出带可点击原帖链接的 Markdown 报告。
+**面向独立开发者的社区情报工具**：从 V2EX 等社区抓取帖子，调用 LLM 提炼**创意 / 痛点 / 独立开发机会 / 趋势洞察**，输出带可点击原帖链接的 Markdown 报告，帮你低成本发现「值得做的东西」。
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
 
 ## 特性
+
+- **为独立开发者而生**：四类洞察直指「做什么、做给谁、值不值得做」——创意点子、用户痛点、低门槛机会、技术趋势。
+- **单一入口**：`analyzer.py` 一个命令自动完成「爬取 → 分析 → 打印报告绝对路径」，无需手动干预是否爬取。
+- **自动增量 / 全量**：有数据时只抓新增、只分析新增；首次运行或数据为空时自动全量。
+- **来源可插拔**：新增社区只需实现一个来源类并注册，主流程与分析模块不动。
+- **零运行时依赖**：只用标准库 `urllib`，开箱即跑。
+- **LLM 自带 URL + Key**：只支持 OpenAI 协议（DeepSeek / OpenRouter / Ollama / vLLM 等均兼容），URL 与 Key 缺失即退出，不误发到官方端点。
+- **可点击来源**：报告每条洞察的「来源帖子」是代码还原的真实原帖链接，不经过 LLM，杜绝杜撰 URL。
+- **省成本**：今日列表缓存 + 分析 run_id 缓存，重跑不重复请求；正文/回复截断控制 token。
+
+## 环境要求
+
+| 项 | 要求 |
+|---|---|
+| **Python** | 3.10+（**运行时零第三方依赖**，仅标准库 `urllib`） |
+| **开发工具**（可选） | [uv](https://docs.astral.sh/uv/) —— 仅开发/安装 dev 工具时需要；直接运行无需 |
+| **网络** | 能访问来源社区 API（V2EX）用于爬取；能访问你自带的 LLM API（OpenAI 兼容）用于分析 |
+| **LLM 配置** | `OPENAI_API_KEY`（环境变量，必填）；`OPENAI_BASE_URL` 与 `ANALYZE_MODEL` 必填（环境变量或 config.json `llm` 节二选一） |
+
+> 运行时零依赖：装好 Python 后可直接 `python3 analyzer.py` 运行；uv 与 dev 依赖（ruff / pytest / pyright / pre-commit）仅用于开发与测试。
+
+## 工作原理
 
 - **单一入口**：`analyzer.py` 一个命令自动完成「爬取 → 分析 → 打印报告绝对路径」，无需手动干预是否爬取。
 - **自动增量 / 全量**：有数据时只抓新增、只分析新增；首次运行或数据为空时自动全量。

@@ -1,13 +1,21 @@
 # 拾贝 · 项目状态
 
+## [2026-08-02] 定位明确 + v0.1.0 发布
+
+### 现状
+- **定位**：面向独立开发者的社区情报工具（README / design / pyproject 已统一）。
+- **环境声明**：README 新增「环境要求」（Python 3.10+ 零运行时依赖 / uv 仅开发 / 网络与 LLM 配置要求）。
+- **已发布**：GitHub 仓库 `Angryshark128/shibei`（Public），main 分支已推送，tag `v0.1.0`。
+- 注：本环境 github.com HTTPS 不通，push 走 SSH over 443（`ssh.github.com:443`）。
+- 45 测试 / ruff / pyright 全绿；pre-commit 钩子全过。
+
 ## [2026-08-02] 开源标准完善
 
 ### 现状
 - **设计文档重写**：docs/design.md 已按当前实现完全对齐（单一入口、run_crawl、URL/Key 必填、max_tokens、错误透传、[#id] 锚点链接还原）。
 - **开源标准文件**：LICENSE(MIT)、README 重写（特性/快速开始/配置/扩展/路线图）、CONTRIBUTING.md、CHANGELOG.md。
-- **工程配置**：pyproject 元数据（license/classifiers/URLs 占位待替换）、.pre-commit-config.yaml（local 钩子：ruff/pyright/pytest，离线可用）、.editorconfig、.github（CI + issue/PR 模板）。
-- **已 git init 并提交基线**：27 个文件入库，工作区干净。
-- 45 测试 / ruff / pyright 全绿；pre-commit 钩子全过。
+- **工程配置**：pyproject 元数据（license/classifiers/URLs）、.pre-commit-config.yaml（local 钩子：ruff/pyright/pytest，离线可用）、.editorconfig、.github（CI + issue/PR 模板）。
+- **已 git init 并提交基线**：27 个文件入库。
 - 注意：pyproject `[project.urls]` 用 `<your-org>` 占位，发布前替换为真实仓库地址；README 徽章同理。
 - 注意：V2EX API 大量爬取后可能临时 403/不可达（限流 ~600 次/小时），需等待重置。
 
