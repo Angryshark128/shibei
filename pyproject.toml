@@ -23,10 +23,10 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://github.com/<your-org>/shibei"
-Repository = "https://github.com/<your-org>/shibei"
-Documentation = "https://github.com/<your-org>/shibei#readme"
-Changelog = "https://github.com/<your-org>/shibei/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/Angryshark128/shibei"
+Repository = "https://github.com/Angryshark128/shibei"
+Documentation = "https://github.com/Angryshark128/shibei#readme"
+Changelog = "https://github.com/Angryshark128/shibei/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
