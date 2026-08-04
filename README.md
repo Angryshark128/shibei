@@ -21,7 +21,7 @@
 |---|---|
 | **Python** | 3.10+（**运行时零第三方依赖**，仅标准库 `urllib`） |
 | **开发工具**（可选） | [uv](https://docs.astral.sh/uv/) —— 仅开发/安装 dev 工具时需要；直接运行无需 |
-| **网络** | 能访问来源社区 API（V2EX）用于爬取；能访问你自带的 LLM API（OpenAI 兼容）用于分析 |
+| **网络** | 能访问来源社区 API（V2EX / Hacker News / Lobste.rs / Dev.to / 少数派 / Product Hunt）用于爬取；能访问你自带的 LLM API（OpenAI 兼容）用于分析 |
 | **LLM 配置** | `OPENAI_API_KEY`（环境变量，必填）；`OPENAI_BASE_URL` 与 `ANALYZE_MODEL` 必填（环境变量或 config.json `llm` 节二选一） |
 
 > 运行时零依赖：装好 Python 后可直接 `python3 analyzer.py` 运行；uv 与 dev 依赖（ruff / pytest / pyright / pre-commit）仅用于开发与测试。
@@ -143,6 +143,8 @@ $ uv run python analyzer.py
 | `sources.{来源}.request_delay` | 请求间隔（秒），控制限流 |
 | `sources.{来源}.max_retries` | 请求失败重试次数 |
 | `llm.base_url` | OpenAI 兼容 API 地址 |
+
+> 完整配置见仓库 `config.json`：已内置 hackernews / lobsters / devto / sspai / producthunt 五节的默认节点与参数；去掉某节（或 `enabled: false`）即可停用该来源。
 | `llm.model` / `llm.max_tokens` | 模型名 / 单次输出上限 |
 
 ### 环境变量（优先级：环境变量 > config.json）
@@ -193,7 +195,7 @@ data/
 │   ├── analysis.md            # 全量报告
 │   └── analysis_today.md      # 增量报告
 ├── .cache/                    # 列表缓存 + 分析缓存（分析后自动清理）
-└── v2ex/{node}/{id}.json      # 统一结构帖子
+└── {source}/{node}/{id}.json  # 统一结构帖子（每来源一目录）
 ```
 
 报告示例（每条来源均可点击跳回原帖）：
@@ -210,6 +212,21 @@ data/
 - {创意描述} — [帖子标题](https://www.v2ex.com/t/1229217)
 ```
 
+> 完整报告示例见 [examples/analysis.md](examples/analysis.md)。
+
+## 已接入数据源
+
+| 来源 | 接入方式 | 特点 |
+|---|---|---|
+| V2EX | JSON API（免认证） | 节点可配置，`crawler.py list` 查看全部节点 |
+| Hacker News | Firebase JSON API（免认证） | Show / Ask / Top / New 四类；评论递归展平 |
+| Lobste.rs | JSON API（免认证） | 按标签爬取 + `hottest` 首页 |
+| Dev.to (Forem) | JSON API（免认证，自定义 Accept） | 按 tag 爬取，含评论树 |
+| 少数派 | RSS 2.0 | 全站 feed，无评论接口 |
+| Product Hunt | RSS | 每日新品，无评论接口 |
+
+所有来源输出统一结构帖子 JSON（`data/{source}/{node}/{id}.json`），限流由各来源配置节独立控制，来源间并行爬取互不影响。
+
 ## 多来源扩展
 
 新增社区只需三步（详见 `docs/design.md` §5.4）：
@@ -217,6 +234,8 @@ data/
 1. 新建 `sources/{name}.py`，继承 `Source` 实现 `fetch_topics` / `fetch_replies` / `list_nodes`。
 2. 在 `sources/__init__.py` 注册。
 3. 在 config.json 加一节来源配置。
+
+通用助手在 `sources/base.py`：`http_get_json`（可传 `extra_headers`）、`http_get_xml` / `parse_atom_feed`（Atom 与 RSS 2.0）、`strip_html`、`iso_to_unix`（ISO 8601 / RFC 2822）。
 
 ## 命令行参考
 
@@ -243,7 +262,7 @@ uv run pre-commit run --all-files        # 见 .pre-commit-config.yaml
 
 ## 路线图
 
-- [ ] 更多来源：Hacker News、Reddit、即刻
+- [ ] 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
 - [ ] Docker 镜像与 cron 定时部署
 - [ ] 报告增强：分类标签、历史对比、导出其它格式
 
