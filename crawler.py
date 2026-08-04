@@ -13,8 +13,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -63,13 +66,17 @@ def load_json(path: Path) -> Any:
 
 
 def get_sources(source_name: str | None, config: dict[str, Any]) -> list[Source]:
-    """按 config 的 enabled 过滤来源；指定 source_name 时只保留该来源。"""
+    """按 config 的 enabled 过滤来源；指定 source_name 时只保留该来源。
+
+    来源必须出现在 config 的 sources 节且 enabled 为真才启用（新来源需先加配置节，
+    避免仅注册实现类就静默爬取）。source_name 指定了但不在已启用列表时返回空。
+    """
     sources: list[Source] = []
     for name, cls in SOURCES.items():
         if source_name and name != source_name:
             continue
-        conf = config.get("sources", {}).get(name, {})
-        if not conf.get("enabled", True):
+        conf = config.get("sources", {}).get(name)
+        if not conf or not conf.get("enabled", True):
             continue
         sources.append(
             cls(
@@ -103,16 +110,22 @@ def collect_topics(source: Source, node: str, pages: int) -> list[Post]:
 
     result = list(seen.values())
     result.sort(key=lambda p: p.created, reverse=True)  # 新帖在前
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    with open(cache_file, "w", encoding="utf-8") as f:
-        json.dump([p.to_dict() for p in result], f, ensure_ascii=False)
+    _write_json_atomic(cache_file, [p.to_dict() for p in result])
     return result
 
 
+def _write_json_atomic(path: Path, obj: Any, indent: int | None = None) -> None:
+    """原子写 JSON：先写临时文件再 os.replace，中断/崩溃不留半截文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=indent)
+    tmp.replace(path)
+
+
 def save_topic(target: Path, post: Post) -> None:
-    """按 4.1 统一结构写帖子 JSON。"""
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(post.to_dict(), f, ensure_ascii=False, indent=2)
+    """按 4.1 统一结构写帖子 JSON（原子写，Ctrl+C 中断不产生损坏文件）。"""
+    _write_json_atomic(target, post.to_dict(), indent=2)
 
 
 def crawl(source: Source, nodes: list[str], pages: int, since: int | None = None) -> int:
@@ -138,7 +151,7 @@ def crawl(source: Source, nodes: list[str], pages: int, since: int | None = None
             post.reply_list = replies[:MAX_REPLIES]
             save_topic(target, post)
             new_count += 1
-            print(f"[{i}/{len(posts)}] {post.id} - {post.title}")
+            print(f"[{source.name} {i}/{len(posts)}] {post.id} - {post.title}")
     return new_count
 
 
@@ -183,10 +196,16 @@ def run_crawl(config: dict[str, Any], source_name: str | None = None, today: boo
 
     today=True 时按 state 的 last_crawl 增量爬取，并更新 last_crawl；
     today=False 时全量爬取、不更新时间戳。
+
+    来源之间并行（ThreadPoolExecutor）：不同来源是独立端点、限流互不影响，
+    request_delay 各自保护自己，串行纯属浪费。state 写入用锁保护防丢键。
     """
+    sources = get_sources(source_name, config)
     state = load_state()
+    state_lock = threading.Lock()
     total_new = 0
-    for source in get_sources(source_name, config):
+
+    def _crawl_one(source: Source) -> int:
         conf = config.get("sources", {}).get(source.name, {})
         nodes = list(conf.get("nodes", []))
         pages = int(conf.get("pages_per_node", 3))
@@ -196,13 +215,24 @@ def run_crawl(config: dict[str, Any], source_name: str | None = None, today: boo
             new = crawl(source, nodes, pages, since=since)
         except Exception as e:  # 单来源失败不影响其他来源
             print(f"[!] 来源 {source.display_name} 爬取失败: {e}", file=sys.stderr)
-            continue
+            return 0
 
         if today:
-            state.setdefault(source.name, {})["last_crawl"] = int(time.time())
-            save_state(state)
-        total_new += new
+            with state_lock:  # 共享 state 读写加锁，避免并行丢键
+                state.setdefault(source.name, {})["last_crawl"] = int(time.time())
+                save_state(state)
         print(f"[{source.display_name}] 新增 {new} 帖")
+        return new
+
+    pool = ThreadPoolExecutor(max_workers=len(sources))
+    try:
+        for n in pool.map(_crawl_one, sources):
+            total_new += n
+    except KeyboardInterrupt:
+        # 中断：取消未开始任务，不等待进行中线程（进程退出即终止），已保存数据幂等
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
     return total_new
 
 
@@ -210,10 +240,15 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
 
-    if args.command == "list":
-        return cmd_list(args, config)
-
-    total_new = run_crawl(config, source_name=args.source, today=args.today)
+    try:
+        if args.command == "list":
+            return cmd_list(args, config)
+        total_new = run_crawl(config, source_name=args.source, today=args.today)
+    except KeyboardInterrupt:
+        # 优雅退出：os._exit 绕过解释器对非守护工作线程的 join，立即结束；
+        # 数据均原子写，已保存内容不丢，下次运行自动断点续传。
+        print("\n[!] 已中断（Ctrl+C）。已爬取的数据均已保存，下次运行自动续传。", file=sys.stderr, flush=True)
+        os._exit(130)
     print(f"完成，共新增 {total_new} 帖")
     return 0
 

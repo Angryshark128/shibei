@@ -4,8 +4,23 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **多来源接入**（sources/ 新增 5 个实现 + 注册 + config 配置节）
+  - Hacker News：Firebase JSON API，列表端点二次请求详情，评论 BFS 递归展平，deleted/dead 跳过。
+  - Lobste.rs：JSON API，按标签分页；`submitter_user`/`commenting_user` 为字符串用户名，评论扁平列表。
+  - Dev.to (Forem)：JSON API + 自定义 `Accept: application/vnd.forem.api-v1+json`，评论树递归展平。
+  - 少数派：RSS 2.0 feed，无评论接口。
+  - Product Hunt：RSS feed，无评论接口。
+- **base.py 通用助手**：`http_get_json` 支持 `extra_headers`；新增 `http_get_xml` / `parse_atom_feed`（Atom 与 RSS 2.0 兼容）/ `strip_html` / `iso_to_unix`（ISO 8601 与 RFC 2822）。
+- **行为调整**：`get_sources` 改为来源必须出现在 config 配置节且 `enabled: true` 才启用（缺失配置节不再默认启用）。
+- **并行爬取**：`run_crawl` 的来源间并行（`ThreadPoolExecutor`）。不同来源限流互不影响，`request_delay` 各自保护；state 写入加锁防丢键。分析本就并发（批次 × 类别，`max_workers=4`）。
+- **爬取日志带来源标识**：进度行 `[v2ex 10/10] id - title`，并行下可区分来源。
+- **Ctrl+C 优雅退出**：`os._exit(130)` 立即结束并打印提示，不再抛 traceback / 等待工作线程；帖子与列表缓存改原子写，中断不产生损坏文件，下次运行自动断点续传。
+- **分析结论强制中文**：批次 / 合并 prompt 规则强化为「一律用中文回答；即使原文是英文，也要用中文输出」（英文源接入后保证报告仍为中文）。
+
 ### 计划
-- 更多来源：Hacker News、Reddit、即刻
+- 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
 - Docker 镜像与 cron 定时部署
 - 报告增强：分类标签、历史对比、导出其它格式
 

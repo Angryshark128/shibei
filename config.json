@@ -23,6 +23,62 @@
       "pages_per_node": 6,
       "request_delay": 1.2,
       "max_retries": 3
+    },
+    "hackernews": {
+      "enabled": true,
+      "nodes": [
+        "show",
+        "ask",
+        "top"
+      ],
+      "pages_per_node": 3,
+      "request_delay": 0.5,
+      "max_retries": 3
+    },
+    "lobsters": {
+      "enabled": true,
+      "nodes": [
+        "hottest",
+        "programming",
+        "practices",
+        "security",
+        "rust",
+        "web"
+      ],
+      "pages_per_node": 3,
+      "request_delay": 1.0,
+      "max_retries": 3
+    },
+    "devto": {
+      "enabled": true,
+      "nodes": [
+        "startup",
+        "saas",
+        "indie",
+        "productivity",
+        "webdev"
+      ],
+      "pages_per_node": 3,
+      "request_delay": 1.0,
+      "max_retries": 3
+    },
+    "sspai": {
+      "enabled": true,
+      "nodes": [
+        "all"
+      ],
+      "pages_per_node": 1,
+      "request_delay": 1.0,
+      "max_retries": 3
+    },
+    "producthunt": {
+      "enabled": true,
+      "nodes": [
+        "today"
+      ],
+      "pages_per_node": 1,
+      "request_delay": 1.0,
+      "max_retries": 3
     }
   },
   "llm": {

@@ -204,3 +204,60 @@ def test_run_crawl_source_failure_continues(env, monkeypatch):
     monkeypatch.setattr(crawler, "crawl", fake_crawl)
     config = {"sources": {"bad": {"enabled": True}, "fake": {"enabled": True}}}
     assert crawler.run_crawl(config, today=False) == 2
+
+
+def test_run_crawl_parallel_sources_all_update_state(env, monkeypatch):
+    # 来源并行爬取，每个来源的 last_crawl 都写入且不互相覆盖
+    def make(name):
+        return type(name, (FakeSource,), {"name": name, "display_name": name})()
+
+    s1, s2 = make("s1"), make("s2")
+    monkeypatch.setattr(crawler, "get_sources", lambda *a, **k: [s1, s2])
+    monkeypatch.setattr(crawler, "crawl", lambda *a, **k: 1)
+    config = {"sources": {"s1": {"enabled": True}, "s2": {"enabled": True}}}
+    assert crawler.run_crawl(config, today=True) == 2
+    st = crawler.load_state()
+    assert st["s1"]["last_crawl"] > 0
+    assert st["s2"]["last_crawl"] > 0
+
+
+def test_run_crawl_parallel_sources_fail_one(env, monkeypatch):
+    # 并行时单来源抛异常不影响其他来源的新增统计
+    def fake_crawl(source, nodes, pages, since=None):
+        if source.name == "bad":
+            raise RuntimeError("boom")
+        return 3
+
+    class FakeBad(FakeSource):
+        name = "bad"
+        display_name = "Bad"
+
+    monkeypatch.setattr(crawler, "get_sources", lambda *a, **k: [FakeBad(), FakeSource()])
+    monkeypatch.setattr(crawler, "crawl", fake_crawl)
+    config = {"sources": {"bad": {"enabled": True}, "fake": {"enabled": True}}}
+    assert crawler.run_crawl(config, today=True) == 3
+    st = crawler.load_state()
+    assert "bad" not in st  # 失败来源不写 last_crawl
+    assert st["fake"]["last_crawl"] > 0
+
+
+# ---------- 日志与优雅退出 ----------
+
+
+def test_crawl_log_includes_source(env, capsys):
+    # 并行爬取后日志需带来源标识，便于区分
+    src = FakeSource(topics={("python", 1): [_post(1)]}, replies={"1": []})
+    crawler.crawl(src, ["python"], pages=1)
+    assert "[fake 1/1] 1 - 帖1" in capsys.readouterr().out
+
+
+def test_main_interrupt_exits_130(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(crawler, "run_crawl", boom)
+    monkeypatch.setattr(crawler.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit) as e:
+        crawler.main([])
+    assert e.value.code == 130
+    assert "已中断" in capsys.readouterr().err

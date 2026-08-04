@@ -208,7 +208,7 @@ def build_batch_prompt(batch_text: str, idx: int, total: int, title: str, desc: 
 - 如果没有符合定义的信息，输出「无」
 - 不要限制条数，尽可能多地提炼有价值的信息
 - 每条用 `[#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
-- 用中文回答
+- 一律用中文回答；即使原文是英文，也要用中文输出
 
 ---（第 {idx + 1}/{total} 批）
 
@@ -226,7 +226,7 @@ def build_merge_prompt(results: list[str], incremental: bool) -> str:
 - 不要限制条数，尽可能保留所有有价值的信息
 - 每条保留 `[#帖子ID]` 来源标注，不得删除或改写
 - 按价值从高到低排列
-- 用中文回答
+- 一律用中文回答；即使原文是英文，也要用中文输出
 
 {body}"""
 
@@ -434,6 +434,16 @@ def _show_no_new(config: dict[str, Any]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except KeyboardInterrupt:
+        # 优雅退出：os._exit 绕过解释器对非守护工作线程的 join，立即结束；
+        # 数据均原子写，已爬取/分析内容不丢，下次运行自动继续。
+        print("\n[!] 已中断（Ctrl+C）。已爬取/分析的数据均已保存，下次运行自动继续。", file=sys.stderr, flush=True)
+        os._exit(130)
+
+
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     check_env()  # 校验 OPENAI_API_KEY，缺失即退出
     config = load_config()

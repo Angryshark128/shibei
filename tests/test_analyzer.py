@@ -63,6 +63,19 @@ def test_build_batch_prompt_contains_marker_rule():
     assert "批次文本" in prompt
 
 
+def test_build_batch_prompt_forces_chinese_even_for_english():
+    # 数据源有英文（HN / Lobste.rs / Dev.to / Product Hunt），结论必须仍是中文
+    prompt = analyzer.build_batch_prompt("Hello world", idx=0, total=1, title="Trend", desc="def")
+    assert "一律用中文回答" in prompt
+    assert "原文是英文" in prompt
+
+
+def test_build_merge_prompt_forces_chinese_even_for_english():
+    prompt = analyzer.build_merge_prompt(["English result"], incremental=False)
+    assert "一律用中文回答" in prompt
+    assert "原文是英文" in prompt
+
+
 # ---------- merge ----------
 
 
@@ -402,6 +415,18 @@ def test_main_no_topics(env, monkeypatch, capsys):
     rc = analyzer.main([])
     assert rc == 0
     assert "没有可分析的帖子" in capsys.readouterr().out
+
+
+def test_main_interrupt_exits_130(env, monkeypatch, capsys):
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(analyzer, "run_crawl", boom)
+    monkeypatch.setattr(analyzer.os, "_exit", lambda code: (_ for _ in ()).throw(SystemExit(code)))
+    with pytest.raises(SystemExit) as e:
+        analyzer.main([])
+    assert e.value.code == 130
+    assert "已中断" in capsys.readouterr().err
 
 
 def test_main_missing_key_exits(env, monkeypatch, capsys):

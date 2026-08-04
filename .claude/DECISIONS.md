@@ -1,6 +1,81 @@
 # 拾贝 · 决策记录
 
-## [2026-08-02] 模型名改为必填（去掉 gpt-4o-mini 兜底）
+## [2026-08-03] Ctrl+C 用 os._exit 优雅退出 + 数据原子写
+
+**背景**  
+并行爬取后，Ctrl+C 若用 `sys.exit` / 返回退出码，解释器退出时 `concurrent.futures.thread._python_exit` 会 join 所有**非守护**工作线程——即使已 `shutdown(wait=False)`，进程仍会阻塞到最慢来源爬完（实测 3s 的 sleep 阻塞了 3.06s）。这不是「优雅关闭」。
+
+**决策**  
+- 两个入口（`crawler.py` / `analyzer.py`）捕获 `KeyboardInterrupt`，打印提示后 `os._exit(130)` 立即终止（绕过 `_python_exit` 的 join）。
+- `save_topic` 与列表缓存改为**原子写**（先写 `.tmp` 再 `os.replace`）：`os._exit` 中断不产生半截 JSON，帖子要么完整要么不存在，下次运行断点续传。
+
+**理由**  
+爬虫数据以文件为单位持久化，`os._exit` 不丢已完成内容；原子写消除唯一的数据损坏窗口（worker 写到一半被杀）。测试通过 monkeypatch `os._exit` 验证退出码与提示。
+
+**备选方案**  
+- `sys.exit(130)` — 否，被 `_python_exit` join 阻塞，爬取期间 Ctrl+C 等于没反应。
+- 等 worker 跑完再退 — 否，可能等数分钟，违背「优雅」。
+- 仅 os._exit 不做原子写 — 否，worker 写帖中途被杀会留损坏文件，且该 id 因「已存在」被永久跳过。
+
+## [2026-08-03] 来源间并行爬取
+
+**背景**  
+多来源后 `run_crawl` 仍逐来源串行。用户指出不同来源限流互不影响，应可并行。
+
+**决策**  
+`run_crawl` 用 `ThreadPoolExecutor(max_workers=len(sources))` 并行爬取来源；state 读写用 `threading.Lock` 保护（`save_state` 本身原子替换，锁防止并行时读到半更新状态 / 丢键）。单来源失败仍不影响其他。分析侧保持现状（批次 × 类别并发，`max_workers=4`），因 LLM 调用共享同一 API Key，按来源再并行不增加吞吐。
+
+**理由**  
+爬取是 I/O + sleep 密集（`request_delay` 保护各自来源），串行是纯等待浪费；并行墙钟 ≈ 最慢来源。分析是 LLM 单 key 限流，已有批次并发即可饱和。
+
+**备选方案**  
+- 来源流水线化（A 分析时 B 爬取）— 否，分析共用 LLM key 是真正瓶颈，收益趋零且复杂度高。
+- 不并行 — 否，等待浪费明显。
+
+## [2026-08-03] 分析结论强制中文（即使数据源是英文）
+
+**背景**  
+接入 HN / Lobste.rs / Dev.to / Product Hunt 等英文源后，用户明确要求：不管数据源是英文还是中文，最终分析文档结论都必须是中文。
+
+**决策**  
+批次与合并 prompt 的规则统一强化为「一律用中文回答；即使原文是英文，也要用中文输出」，并用测试锁定（`test_build_batch_prompt_forces_chinese_even_for_english` / `test_build_merge_prompt_forces_chinese_even_for_english`）。
+
+**理由**  
+模型可能照源语言输出（源是英文就回英文）。措辞显式覆盖「原文为英文」场景，比泛泛的「用中文回答」更稳。
+
+**备选方案**  
+- 不做修改，沿用「用中文回答」— 否，用户明确要求，且英文源占比高，值得写死。
+- 分析后再做语言归一 — 否，让 LLM 一步到位最省 token，且归一不可靠。
+
+## [2026-08-03] 来源必须在 config 配置节且 enabled 才启用
+
+**背景**  
+`get_sources` 原逻辑是 `conf.get("enabled", True)`——来源未在 config 出现时默认启用。单来源时代无感；接入 5 个新来源后，用户若只保留 v2ex 配置节，其余 5 个来源会全部默认启用并对外发请求，属意外行为。同时与设计文档「新增来源需在 config 加一节」的描述不符。
+
+**决策**  
+`get_sources` 改为：来源必须出现在 config 的 `sources` 节且 `enabled` 为真才启用（缺失配置节即不启用）。config.json 已为 5 个新来源显式配置 `enabled: true`，行为不变。
+
+**理由**  
+「配置驱动」更可预期：源码注册 ≠ 已接入，接入 = 实现 + 注册 + 配置节。避免仅注册实现类就静默爬取外部 API。
+
+**备选方案**  
+- 保持缺失即启用，改测试适配 — 否，多来源下是真实隐患，且与文档意图冲突。
+- 默认 `enabled: false` — 需在每节显式开，改动面更大，与现有「opt-out」习惯不符。
+
+## [2026-08-03] 新来源字段按真实 API 适配（不止照抄接入指南）
+
+**背景**  
+接入指南部分字段假设与真实 API 不符，经实测确认：Lobste.rs 的 `submitter_user` / `commenting_user` 是字符串用户名（指南写对象）；评论为扁平列表且 `children` 多为 null（指南写嵌套树）；少数派 feed 实为 RSS 2.0 且 `pubDate` 为 RFC 2822（指南写 Atom + ISO 8601）；Dev.to 评论 id 是 `id_code`。
+
+**决策**  
+实现按真实响应适配并做防御：用户名兼容字符串/对象两种形态；评论展平兼容扁平与嵌套；`parse_atom_feed` 同时解析 Atom 与 RSS 2.0；`iso_to_unix` 兼容 ISO 8601 与 RFC 2822。
+
+**理由**  
+字段名以实测为准，否则抓下来就是脏数据（或直接崩溃，如 `children=None` 进入递归）。防御性处理保证不同 API 版本都能归一。
+
+**备选方案**  
+- 严格照指南实现 — 否，Lobste.rs 真实数据会让 `_flatten_comments` 对 `None` 迭代抛 TypeError。
+
 
 **背景**  
 `ANALYZE_MODEL` 原为可选、兜底 `gpt-4o-mini`。但用户用的是第三方厂商，`gpt-4o-mini` 在该厂商不存在，导致 400 `model not found`。模型名与 URL 一样属于「用户自带」，不同厂商各不相同，不该有内置默认。

@@ -36,13 +36,18 @@
 ├── models.py            # 统一数据结构 Post/Reply
 ├── sources/             # 来源抽象层
 │   ├── __init__.py      # 来源注册表 SOURCES
-│   ├── base.py          # Source 抽象基类 + http_get_json 通用助手
-│   └── v2ex.py          # V2EX 来源实现
+│   ├── base.py          # Source 抽象基类 + HTTP / RSS / HTML / 时间戳通用助手
+│   ├── v2ex.py          # V2EX
+│   ├── hackernews.py    # Hacker News
+│   ├── lobsters.py      # Lobste.rs
+│   ├── devto.py         # Dev.to (Forem)
+│   ├── sspai.py         # 少数派（RSS）
+│   └── producthunt.py   # Product Hunt（RSS）
 ├── data/                # 运行时数据（gitignored，不入库）
 │   ├── state.json       # 运行状态（按来源记录时间戳）
 │   ├── analysis/        # 分析报告（analysis.md / analysis_today.md）
 │   ├── .cache/          # 中间缓存
-│   └── v2ex/{node}/{id}.json   # 每个来源一个子目录
+│   └── {source}/{node}/{id}.json   # 每个来源一个子目录
 ├── tests/               # pytest 测试
 ├── pyproject.toml       # uv 工程配置（零运行时依赖）
 └── README.md
@@ -200,12 +205,17 @@ class Source(ABC):
 
 - 主循环（crawler.py）只依赖这三个方法 + 来源配置，不感知具体社区。
 - `request_delay` / `max_retries` 挂在来源实例上，抓取时直接使用。
-- 通用 HTTP 助手 `http_get_json(url, *, timeout, retries, delay)` 在 base.py，各来源复用：
-  - 设置 User-Agent（`ShiBei-Crawler/1.0`）、超时 30 秒。
-  - 指数退避重试：`delay * 2^attempt`，上限 60 秒。
-  - **HTTP 404/403 直接返回 `[]`，不重试**（帖子被删/权限不足/限流）。
-  - 其他错误重试到 `max_retries` 次；全部失败返回 `[]`，不抛异常。
-  - 用标准库 `urllib.request`，零第三方依赖。
+- 通用助手全在 base.py，各来源复用，零第三方依赖：
+  - `http_get_json(url, *, timeout, retries, delay, extra_headers=None)`：
+    - 设置 User-Agent（`ShiBei-Crawler/1.0`）、超时 30 秒。
+    - 指数退避重试：`delay * 2^attempt`，上限 60 秒。
+    - **HTTP 404/403 直接返回 `[]`，不重试**（帖子被删/权限不足/限流）。
+    - 其他错误重试到 `max_retries` 次；全部失败返回 `[]`，不抛异常。
+    - `extra_headers` 合并进请求头，可覆盖默认 `Accept`（如 Dev.to 的 Forem v1 header）。
+  - `http_get_xml(...)`：GET XML/RSS 返回原始文本（同款退避），失败返回 `None`。
+  - `parse_atom_feed(xml_text)`：解析 Atom 或 RSS 2.0，返回统一 entry 结构（多数派 / Product Hunt 的「Atom」feed 实为 RSS 2.0）。
+  - `strip_html(text)`：标准库去 HTML 标签（实体解码）。
+  - `iso_to_unix(text)`：ISO 8601 / RFC 2822 转 unix 秒级时间戳，失败返回 0。
 
 ### 5.2 来源注册表（__init__.py）
 
@@ -223,11 +233,22 @@ SOURCES = {
 - 映射：`member.username` → `author`，`replies` → `replies_count`，`node.name` → `node`，`id` 转字符串。
 - 对 API 返回做防御：非 list / 非 dict 条目直接跳过。
 
-### 5.4 新增来源三步
+### 5.4 已接入来源一览
 
-1. 新建 `sources/{name}.py`，继承 `Source` 实现 `fetch_topics` / `fetch_replies` / `list_nodes`。
+| 来源 | 接入方式 | 说明 |
+|---|---|---|
+| V2EX | JSON API | 无需认证；节点 `list_nodes` 走 `nodes/all.json` |
+| Hacker News | Firebase JSON API | 列表端点只返回 ID 数组，需二次请求详情；评论递归展平 BFS 取 10 条 |
+| Lobste.rs | JSON API | `submitter_user` / `commenting_user` 是字符串用户名；评论为扁平列表 |
+| Dev.to (Forem) | JSON API + 自定义 Accept | 列表/评论/标签端点需 `application/vnd.forem.api-v1+json` header |
+| 少数派 | RSS | 实际为 RSS 2.0；无评论接口；`pubDate` 为 RFC 2822 |
+| Product Hunt | RSS | 无评论接口；官方 GraphQL 需 OAuth，不用 |
+
+### 5.5 新增来源三步
+
+1. 新建 `sources/{name}.py`，继承 `Source` 实现 `fetch_topics` / `fetch_replies` / `list_nodes`；复用 base.py 的通用助手。
 2. 在 `sources/__init__.py` 的 `SOURCES` 注册。
-3. 在 config.json `sources` 加一节（enabled / nodes / pages_per_node 等）。
+3. 在 config.json `sources` 加一节（enabled / nodes / pages_per_node 等）。来源必须出现在配置节且 `enabled: true` 才会被爬取（缺失配置节即不启用）。
 
 ---
 
@@ -259,7 +280,9 @@ SOURCES = {
 
 - `today=True`：按 state 的 `last_crawl` 增量爬取并更新 `last_crawl`。
 - `today=False`：全量爬取、不更新时间戳。
-- 遍历所有 enabled 来源；**单来源失败不影响其他来源**（try/except 包裹）。
+- **来源间并行**（`ThreadPoolExecutor`）：不同来源是独立端点、限流互不影响，`request_delay` 各自保护；并行后墙钟 ≈ 最慢来源而非总和。state 写入用锁保护，防止并行丢键。
+- **单来源失败不影响其他来源**（try/except 包裹）。
+- 分析侧本就并发：`analyze()` 在（批次 × 类别）层用 `max_workers=4`，跨来源的 LLM 调用共享同一 API Key，无需按来源再并行。
 
 ### 6.4 CLI
 
@@ -449,10 +472,11 @@ uv run python analyzer.py
 - P0：来源抽象层（base/v2ex/注册表）、统一数据结构、crawler 主循环。
 - P1：analyzer 4 分类分析、增量模式、run_id 缓存、层级合并、链接还原、`--full`。
 - 单一入口（analyzer 自动爬取 + 分析 + 打印绝对路径）；LLM URL/Key 必填；错误透传。
+- 多来源：Hacker News、Lobste.rs、Dev.to、少数派、Product Hunt（RSS/JSON API + 通用助手）。
 
 ### 路线图
 
-- 新来源接入：Hacker News、Reddit、即刻等。
+- 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区。
 - Docker 镜像与 cron 定时部署。
 - 报告增强：分类标签、历史对比、导出其它格式。
 - 节点/来源的交互式浏览。

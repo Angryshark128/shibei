@@ -143,9 +143,9 @@ $ uv run python analyzer.py
 | `sources.{来源}.request_delay` | 请求间隔（秒），控制限流 |
 | `sources.{来源}.max_retries` | 请求失败重试次数 |
 | `llm.base_url` | OpenAI 兼容 API 地址 |
+| `llm.model` / `llm.max_tokens` | 模型名 / 单次输出上限 |
 
 > 完整配置见仓库 `config.json`：已内置 hackernews / lobsters / devto / sspai / producthunt 五节的默认节点与参数；去掉某节（或 `enabled: false`）即可停用该来源。
-| `llm.model` / `llm.max_tokens` | 模型名 / 单次输出上限 |
 
 ### 环境变量（优先级：环境变量 > config.json）
 
