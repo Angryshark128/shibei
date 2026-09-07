@@ -1,9 +1,9 @@
 import { Globe, LogOut, Moon, Palette, Settings, Sun } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ui/confirm";
 import { useToast } from "@/components/ui/toast";
-import { THEMES, type Scheme, type ThemeId } from "@/config/theme";
+import { THEMES, type ThemeId } from "@/config/theme";
 import { useTheme } from "@/hooks/useTheme";
 import { api } from "@/lib/api";
 import { currentLocale, setLocale } from "@/i18n";
@@ -18,7 +18,8 @@ export interface FloatingControlsProps {
 /**
  * 悬浮控制按钮组（规范 7.16 最新约束）：
  * 默认折叠为单个品牌色主按钮，hover/focus 展开子按钮组（主题色→明暗→语言→退出登录），
- * 退出登录用 rose 语义色 + ConfirmDialog，成功后 Toast 跳转。
+ * 展开/折叠带位移+透明度动画（200ms）；主题色气泡在按钮左侧水平展开，
+ * 鼠标移入气泡不触发收起（气泡是组的 DOM 后代，离开判定用 relatedTarget）。
  */
 export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingControlsProps) {
   const { t } = useTranslation();
@@ -32,20 +33,21 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
 
   const locale = currentLocale();
 
+  const collapse = () => {
+    setExpanded(false);
+    setPaletteOpen(false);
+  };
+
   // 点外部 / Esc 收起（规范 7.16.8）
   useEffect(() => {
     if (!expanded) return;
-    function onPointerDown(e: MouseEvent) {
+    function onPointerDown(e: Event) {
       if (groupRef.current && !groupRef.current.contains(e.target as Node)) {
-        setExpanded(false);
-        setPaletteOpen(false);
+        collapse();
       }
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setExpanded(false);
-        setPaletteOpen(false);
-      }
+      if (e.key === "Escape") collapse();
     }
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKey);
@@ -55,13 +57,19 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
     };
   }, [expanded]);
 
-  const collapse = () => {
-    setExpanded(false);
-    setPaletteOpen(false);
+  /** 鼠标移出整组：目标仍在组内（含气泡）不算离开，避免点配色时自动收起 */
+  const handleMouseLeave = (e: ReactMouseEvent<HTMLDivElement>) => {
+    const related = e.relatedTarget as Node | null;
+    if (related && groupRef.current && groupRef.current.contains(related)) return;
+    collapse();
   };
 
   const togglePalette = () => {
-    setPaletteOpen((v) => !v);
+    setPaletteOpen((v) => {
+      const next = !v;
+      if (next) setExpanded(true);
+      return next;
+    });
   };
 
   const handlePickTheme = (id: ThemeId) => {
@@ -86,14 +94,10 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
   };
 
   const isDark = scheme === "dark";
+  // 子按钮组：展开淡入+上移，折叠淡出+下移（规范 7.16.8，约 200ms）
+  const panelAnim = expanded ? "opacity-100 translate-y-0 scale-100" : "pointer-events-none translate-y-2 scale-95 opacity-0";
   const childBase =
-    "flex h-11 w-11 items-center justify-center rounded-full border bg-surface-0 shadow-lg transition-all duration-150 hover:scale-105 dark:bg-ink-700";
-
-  const sub = (visible: boolean) =>
-    cn(
-      "flex flex-col items-end gap-3 transition-opacity duration-200",
-      visible ? "opacity-100" : "pointer-events-none opacity-0",
-    );
+    "flex h-11 w-11 items-center justify-center rounded-full border bg-surface-0 shadow-lg transition-all duration-200 hover:scale-105 dark:bg-ink-700";
 
   return (
     <>
@@ -101,11 +105,11 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
         ref={groupRef}
         className="fixed bottom-6 right-6 z-50"
         onMouseEnter={() => setExpanded(true)}
-        onMouseLeave={collapse}
+        onMouseLeave={handleMouseLeave}
       >
         <div className="flex flex-col items-end">
-          <div className={sub(expanded)}>
-            {/* 主题色气泡：相对按钮左侧水平展开（规范：避免遮挡同级按钮） */}
+          <div className={cn("flex flex-col items-end gap-3 transition-all duration-200 ease-out", panelAnim)}>
+            {/* 主题色按钮 + 气泡（相对按钮左侧水平展开） */}
             <div className="relative">
               <button
                 type="button"
@@ -116,12 +120,15 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
               >
                 <Palette className="h-5 w-5" aria-hidden="true" />
               </button>
-              {paletteOpen && (
-                <div
-                  role="listbox"
-                  aria-label={t("floating.themeLabel")}
-                  className="absolute bottom-0 right-full mr-3 flex items-center gap-2 rounded-xl border border-surface-3 bg-surface-0 p-3 shadow-xl dark:border-ink-900 dark:bg-ink-700"
-                >
+              <div
+                role="listbox"
+                aria-label={t("floating.themeLabel")}
+                className={cn(
+                  "absolute bottom-0 right-full mr-3 origin-bottom-right transition-all duration-200",
+                  paletteOpen ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0",
+                )}
+              >
+                <div className="flex items-center gap-2 rounded-xl border border-surface-3 bg-surface-0 p-3 shadow-xl dark:border-ink-900 dark:bg-ink-700">
                   {THEMES.map((th) => (
                     <button
                       key={th.id}
@@ -131,14 +138,14 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
                       aria-label={th.id}
                       className={cn(
                         "h-7 w-7 rounded-full transition-transform duration-150 hover:scale-110",
-                        theme === th.id && "ring-2 ring-offset-2 ring-brand-600 dark:ring-offset-ink-700",
+                        theme === th.id && "ring-2 ring-brand-600 ring-offset-2 ring-offset-surface-0 dark:ring-offset-ink-700",
                       )}
                       style={{ background: th.dot }}
                       onClick={() => handlePickTheme(th.id)}
                     />
                   ))}
                 </div>
-              )}
+              </div>
             </div>
 
             {/* 明暗切换 */}
@@ -175,7 +182,7 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
                 type="button"
                 aria-label={t("floating.logoutLabel")}
                 className={cn(
-                  "flex h-11 w-11 items-center justify-center rounded-full border border-rose-200 bg-rose-50 shadow-lg transition-all duration-150 hover:scale-105 dark:border-rose-900 dark:bg-rose-900",
+                  "flex h-11 w-11 items-center justify-center rounded-full border border-rose-200 bg-rose-50 shadow-lg transition-all duration-200 hover:scale-105 dark:border-rose-900 dark:bg-rose-900",
                 )}
                 onClick={() => setLogoutOpen(true)}
               >
@@ -216,5 +223,3 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
     </>
   );
 }
-
-export type { Scheme };

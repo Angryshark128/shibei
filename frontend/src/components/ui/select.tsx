@@ -15,11 +15,13 @@ export interface SelectProps<T extends string> {
   /** 无障碍标签 */
   label?: string;
   disabled?: boolean;
+  /** 面板展开方向：默认向下（top-full），true 时向上（bottom-full） */
+  alignUp?: boolean;
   className?: string;
 }
 
 /** 下拉选择（规范 7.4.6）：文本+箭头结构、覆盖更新、点外/Esc 关闭 */
-export function Select<T extends string>({ value, options, onChange, label, disabled, className }: SelectProps<T>) {
+export function Select<T extends string>({ value, options, onChange, label, disabled, alignUp, className }: SelectProps<T>) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const id = useId();
@@ -65,7 +67,10 @@ export function Select<T extends string>({ value, options, onChange, label, disa
         <div
           role="listbox"
           aria-labelledby={id}
-          className="absolute left-0 top-full z-50 mt-1 max-h-60 w-full min-w-[200px] overflow-y-auto rounded-lg border border-surface-3 bg-surface-0 py-1 shadow-md scrollbar-thin dark:border-ink-700 dark:bg-ink-700"
+          className={cn(
+            "absolute z-50 max-h-60 w-full min-w-[200px] overflow-y-auto rounded-lg border border-surface-3 bg-surface-0 py-1 shadow-md scrollbar-thin dark:border-ink-700 dark:bg-ink-700",
+            alignUp ? "bottom-full mb-1 origin-bottom" : "top-full mt-1 origin-top",
+          )}
         >
           {options.map((o) => {
             const selected = o.value === value;

@@ -1,6 +1,7 @@
-import { FileX, Loader2, Play, RefreshCw, RotateCcw } from "lucide-react";
+import { FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ConfirmDialog } from "@/components/ui/confirm";
 import { EmptyState } from "@/components/ui/empty";
 import { ErrorBlock } from "@/components/ui/error";
 import { StatCard } from "@/components/ui/stat-card";
@@ -46,6 +47,8 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
   });
   const [running, setRunning] = useState<TaskItem | null>(null);
   const [triggerMode, setTriggerMode] = useState<RunMode | null>(null);
+  const [stopOpen, setStopOpen] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const runningIdRef = useRef<string | null>(null);
   const triggerModeRef = useRef<RunMode | null>(null);
 
@@ -133,6 +136,8 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
       triggerModeRef.current = null;
       if (current.status === "succeeded") {
         toast.push("success", mode === "full" ? t("reports.startSuccessFull") : t("reports.startSuccessToday"));
+      } else if (current.status === "interrupted") {
+        toast.push("info", t("reports.taskStopped"));
       } else {
         toast.push("error", t("tasks.statusFailed"));
       }
@@ -200,9 +205,20 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
             </p>
             <p className="mt-0.5 text-xs text-brand-700/80 dark:text-brand-300/80">{t("reports.runningBannerDesc")}</p>
           </div>
-          <Button variant="ghost" onClick={onGoTasks} className="text-sm">
-            {t("reports.viewLog")}
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="secondary"
+              icon={<Square className="h-4 w-4" aria-hidden="true" />}
+              loading={stopping}
+              className="border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-900 dark:text-rose-400"
+              onClick={() => setStopOpen(true)}
+            >
+              {t("tasks.stopLabel")}
+            </Button>
+            <Button variant="ghost" onClick={onGoTasks} className="text-sm">
+              {t("reports.viewLog")}
+            </Button>
+          </div>
         </div>
       )}
 
@@ -339,6 +355,31 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
       </Card>
 
       <p className="text-xs text-ink-400 dark:text-surface-4">{t("reports.runHint")}</p>
+
+      <ConfirmDialog
+        open={stopOpen}
+        onOpenChange={setStopOpen}
+        title={t("tasks.stopConfirmTitle")}
+        message={t("tasks.stopConfirmMessage")}
+        confirmLabel={t("tasks.stopLabel")}
+        danger
+        confirmLoading={stopping}
+        onConfirm={() => {
+          if (!running) return;
+          setStopping(true);
+          api
+            .stopTask(running.id)
+            .then(() => {
+              toast.push("success", t("tasks.stopSent"));
+              setStopOpen(false);
+            })
+            .catch(() => {
+              toast.push("error", t("tasks.statusFailed"));
+              setStopOpen(false);
+            })
+            .finally(() => setStopping(false));
+        }}
+      />
     </div>
   );
 }

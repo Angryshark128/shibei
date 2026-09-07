@@ -4,9 +4,11 @@ import type {
   ReportData,
   ReportsResponse,
   RunResponse,
+  ScheduleConfig,
   TaskDetailResponse,
   TaskItem,
   TaskListResponse,
+  WebhookConfig,
 } from "@/types";
 
 /** 浏览器侧 API 前缀：依赖 vite base（/shibei/api 或 /api） */
@@ -89,6 +91,12 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  testConfig: (payload: { llm?: { base_url?: string; model?: string }; api_key?: string }) =>
+    request<{ ok: boolean; latency_ms: number }>("/config/test", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   changePassword: (current_password: string, new_password: string) =>
     request<{ ok: boolean }>("/password", {
       method: "POST",
@@ -100,6 +108,33 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ enabled }),
     }),
+
+  schedule: () => request<ScheduleConfig>("/schedule"),
+
+  saveSchedule: (payload: { enabled?: boolean; time?: string }) =>
+    request<ScheduleConfig>("/schedule", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  webhook: () => request<WebhookConfig>("/webhook"),
+
+  saveWebhook: (payload: {
+    enabled?: boolean;
+    url?: string;
+    header_key?: string;
+    token?: string;
+    clear_token?: boolean;
+  }) =>
+    request<WebhookConfig>("/webhook", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  testWebhook: () => request<{ ok: boolean }>("/webhook/test", { method: "POST" }),
+
+  stopTask: (id: string) =>
+    request<{ ok: boolean }>(`/tasks/${encodeURIComponent(id)}/stop`, { method: "POST" }),
 
   run: (mode: "today" | "full") =>
     request<RunResponse>("/run", {

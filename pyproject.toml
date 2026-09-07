@@ -1,6 +1,6 @@
 [project]
 name = "shibei"
-version = "0.1.0"
+version = "0.2.0"
 description = "拾贝：面向独立开发者的社区情报工具——抓取社区帖子，用 LLM 提炼创意、痛点、独立开发机会与趋势"
 readme = "README.md"
 requires-python = ">=3.10"

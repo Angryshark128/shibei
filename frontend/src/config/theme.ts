@@ -18,14 +18,10 @@ export const SCHEMES: Array<{ id: Scheme; icon: "sun" | "moon" }> = [
 export const DEFAULT_THEME: ThemeId = "indigo";
 export const DEFAULT_SCHEME: Scheme = "light";
 
-/** 规范 05：可选时区固定 6 个 */
+/** 显示时区选项（固定 2 个：上海 + UTC） */
 export const TIMEZONES: Array<{ label: string; value: string }> = [
-  { label: "Asia/Shanghai", value: "Asia/Shanghai" },
-  { label: "Asia/Tokyo", value: "Asia/Tokyo" },
-  { label: "Asia/Singapore", value: "Asia/Singapore" },
-  { label: "Europe/London", value: "Europe/London" },
-  { label: "America/New_York", value: "America/New_York" },
-  { label: "America/Los_Angeles", value: "America/Los_Angeles" },
+  { label: "上海 (UTC+8)", value: "Asia/Shanghai" },
+  { label: "UTC (UTC+0)", value: "UTC" },
 ];
 
 export const STORAGE_KEYS = {

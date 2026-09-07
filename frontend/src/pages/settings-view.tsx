@@ -1,4 +1,4 @@
-import { KeyRound, Save, ShieldCheck } from "lucide-react";
+import { KeyRound, Save, ShieldCheck, Zap } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,6 +10,8 @@ import { Select } from "@/components/ui/select";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/layout/page-header";
 import { ErrorBlock } from "@/components/ui/error";
+import { ScheduleCard } from "@/components/business/schedule-card";
+import { WebhookCard } from "@/components/business/webhook-card";
 import { TIMEZONES } from "@/config/theme";
 import { setTimezonePref } from "@/hooks/usePrefs";
 import { ApiError, api } from "@/lib/api";
@@ -42,8 +44,8 @@ export function SettingsView() {
   const [model, setModel] = useState("");
   const [maxTokens, setMaxTokens] = useState("4096");
   const [apiKey, setApiKey] = useState("");
-  const [clearKey, setClearKey] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [llmError, setLlmError] = useState<string | null>(null);
 
   // 密码表单
@@ -75,28 +77,24 @@ export function SettingsView() {
     e.preventDefault();
     setLlmError(null);
     if (saving) return;
-    if (!baseUrl.trim()) {
-      setLlmError(t("settings.badUrl"));
-      return;
-    }
-    if (!model.trim()) {
+    if (!baseUrl.trim() || !model.trim()) {
       setLlmError(t("settings.badUrl"));
       return;
     }
     setSaving(true);
     try {
-      const payload: { llm: { base_url: string; model: string; max_tokens: number }; api_key?: string; clear_api_key?: boolean } = {
+      const payload: {
+        llm: { base_url: string; model: string; max_tokens: number };
+        api_key?: string;
+      } = {
         llm: { base_url: baseUrl.trim(), model: model.trim(), max_tokens: Math.max(256, Number(maxTokens) || 4096) },
       };
-      if (clearKey) {
-        payload.clear_api_key = true;
-      } else if (apiKey.trim()) {
+      if (apiKey.trim()) {
         payload.api_key = apiKey.trim();
       }
       await api.saveConfig(payload);
       toast.push("success", t("settings.saveSuccess"));
       setApiKey("");
-      setClearKey(false);
       const fresh = await api.getConfig();
       setConfig(fresh);
     } catch (err) {
@@ -104,6 +102,30 @@ export function SettingsView() {
       toast.push("error", errCodeText(code, t), err instanceof ApiError ? err.message : undefined);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const testLlm = async () => {
+    setLlmError(null);
+    if (!baseUrl.trim() || !model.trim()) {
+      setLlmError(t("settings.badUrl"));
+      return;
+    }
+    setTesting(true);
+    try {
+      const res = await api.testConfig({
+        llm: { base_url: baseUrl.trim(), model: model.trim() },
+        api_key: apiKey.trim() || undefined,
+      });
+      toast.push("success", t("settings.llmTestOk", { ms: res.latency_ms }));
+    } catch (err) {
+      if (err instanceof ApiError) {
+        toast.push("error", t("settings.llmTestFail"), err.message || undefined);
+      } else {
+        toast.push("error", t("settings.llmTestFail"));
+      }
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -194,37 +216,29 @@ export function SettingsView() {
             </Field>
             <Field
               label={t("settings.apiKey")}
-              hint={
-                clearKey
-                  ? t("common.notConfigured")
-                  : config.llm.has_api_key
-                    ? t("settings.apiKeyPh", { hint: config.llm.api_key_hint })
-                    : t("settings.apiKeyEmpty")
-              }
+              hint={config.llm.has_api_key ? t("settings.apiKeyPh", { hint: config.llm.api_key_hint }) : t("settings.apiKeyEmpty")}
             >
               <PasswordInput
                 value={apiKey}
                 autoComplete="new-password"
-                disabled={clearKey}
-                placeholder={clearKey ? "" : t("settings.apiKeyPh", { hint: config.llm.has_api_key ? config.llm.api_key_hint : "****" })}
+                placeholder={t("settings.apiKeyPh", { hint: config.llm.has_api_key ? config.llm.api_key_hint : "****" })}
                 onChange={(e) => setApiKey(e.target.value)}
               />
             </Field>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-ink-700 dark:text-surface-4">
-              <input
-                type="checkbox"
-                checked={clearKey}
-                onChange={(e) => setClearKey(e.target.checked)}
-                className="h-4 w-4 rounded border-surface-4 accent-brand-600"
-              />
-              {t("settings.clearApiKey")}
-            </label>
             {llmError && (
               <p className="text-xs text-rose-600 dark:text-rose-400" role="alert">
                 {llmError}
               </p>
             )}
-            <div className="flex justify-end pt-2">
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="secondary"
+                icon={<Zap className="h-4 w-4" aria-hidden="true" />}
+                loading={testing}
+                onClick={() => void testLlm()}
+              >
+                {t("settings.llmTest")}
+              </Button>
               <Button type="submit" loading={saving} icon={<Save className="h-4 w-4" aria-hidden="true" />}>
                 {t("common.save")}
               </Button>
@@ -232,6 +246,10 @@ export function SettingsView() {
           </form>
         </CardBody>
       </Card>
+
+      {/* 每日定时 + Webhook */}
+      <ScheduleCard />
+      <WebhookCard />
 
       {/* 数据来源 */}
       <Card>
@@ -242,10 +260,10 @@ export function SettingsView() {
         />
         <CardBody className="divide-y divide-surface-3 dark:divide-ink-900">
           {config.sources.map((s) => (
-            <div key={s.name} className="flex items-center justify-between gap-4 py-3">
+            <div key={s.name} className="flex items-start justify-between gap-4 py-3">
               <div className="min-w-0">
                 <p className="text-sm font-medium text-ink-900 dark:text-surface-0">{s.name}</p>
-                <p className="mt-0.5 truncate text-xs text-ink-400 dark:text-surface-4">
+                <p className="mt-0.5 break-words text-xs leading-5 text-ink-400 dark:text-surface-4">
                   {s.nodes.join(" · ")}
                   {!s.enabled && (
                     <span className="ml-2 rounded bg-surface-2 px-1.5 py-0.5 text-ink-400 dark:bg-ink-900">{t("settings.sourceDisabled")}</span>
@@ -312,11 +330,12 @@ export function SettingsView() {
           <div className="max-w-xs">
             <Select
               aria-label={t("settings.timezoneSection")}
+              alignUp
               value={(() => {
                 const saved = localStorage.getItem("timezone");
-                return saved && TIMEZONES.some((z) => z.value === saved) ? saved : "auto";
+                return saved && TIMEZONES.some((z) => z.value === saved) ? saved : "Asia/Shanghai";
               })()}
-              options={[{ value: "auto", label: `${t("common.unknown")} (Auto)` }, ...TIMEZONES.map((z) => ({ value: z.value, label: z.label }))]}
+              options={TIMEZONES}
               onChange={(v) => {
                 setTimezonePref(v);
                 toast.push("success", t("settings.saveSuccess"));

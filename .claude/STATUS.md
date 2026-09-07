@@ -1,5 +1,20 @@
 # 拾贝 · 项目状态
 
+## [2026-09-07 · 晚] v0.2.0 发布 + 生产部署 wjbd.site/shibei/
+
+### 现状
+- **v0.2.0 已打 tag**：多来源 + Web + Docker 全量发布（CHANGELOG 已整理）。
+- **生产部署**：my-nginx（/root/nginx/sites/usa.wjbd.site.conf）加 `location /shibei/` → host.docker.internal:18080（shibei-nginx），`https://wjbd.site/shibei/` 可用。改配置经 `docker run -v /root/nginx:/ng` 写（conf.d 容器内 ro；本机 daemon 只认 /root 视图）。旧配置备份 .bak-20260907。
+- **每日定时调度默认开启 00:00**（web/scheduler.py，20s 心跳守护线程，last_fired 落盘防重启重复）；Webhook 任务完成通知（header key + token + 测试）。
+- **停止任务**：POST /api/tasks/<id>/stop（SIGTERM → interrupted）；报告页横幅 + 运行历史行均可停止（ConfirmDialog）。
+- **UI 调整**：悬浮组配色气泡可点（relatedTarget 判定）、折叠动画；时区仅上海/UTC 下拉向上；AI 卡加测试按钮（/api/config/test 用当前表单值最小对话）；来源节点描述自动换行；移除「清除 Key/Token」UI；favicon.svg。
+- **事故教训**：V2EX API 黑洞（30s 超时×重试串行）会让全量任务看起来卡死 → 增加停止能力；另冒烟 fake key 曾污染 data/web_secrets.json（已清理，用户需重填真实 key）。
+- 质量门：ruff/pyright 0 错、pytest 108 绿、tsc + vite build 过；容器 e2e（调度触发/Webhook 送达/stop→interrupted）全过。
+
+### 下一步
+- 用户重填真实 API Key（fake 已清）
+- 报告增强（P2）；更多来源（Reddit/即刻）
+
 ## [2026-09-07] Web 界面 + Docker 部署
 
 ### 现状

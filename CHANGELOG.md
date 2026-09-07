@@ -2,17 +2,12 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [0.2.0] - 2026-09-07
+
+从「V2EX 单源 CLI」到「多来源 + Web 界面 + Docker 部署」的完整发布。
 
 ### 新增
 
-- **Web 界面与 Docker 部署**（Dockerfile + docker-compose + nginx 子路径反代）
-  - 浏览器查看/触发：报告页（全量/增量报告 Markdown 渲染、数据概览）、运行历史（任务状态 + 实时日志）、设置页（AI 模型、来源开关、账号改密、显示时区）。
-  - 主动触发：增量 / 全量分析按钮，子进程运行 analyzer（`web/runner.py`），单任务并发、状态索引与日志落盘，断容器可恢复。
-  - 登录保护：scrypt 密码哈希 + 签名会话 cookie；初始账号来自 `SHIBEI_USERNAME` / `SHIBEI_PASSWORD` 环境变量。
-  - AI 配置：base_url / model / max_tokens 写入 `data/web_config.json` 并同步仓库 `config.json`（CLI 与 Web 一致）；API Key 仅存 `data/web_secrets.json`（0600）。
-  - 前端：React 18 + Vite + Tailwind（前端约束规范：5 主题色 × 明暗、中英双语、悬浮控制按钮组），构建产物打进镜像。
-- **运行时依赖**：pyproject 声明 flask + waitress（仅 Web 部署需要；CLI 仍零第三方依赖）。
 - **多来源接入**（sources/ 新增 5 个实现 + 注册 + config 配置节）
   - Hacker News：Firebase JSON API，列表端点二次请求详情，评论 BFS 递归展平，deleted/dead 跳过。
   - Lobste.rs：JSON API，按标签分页；`submitter_user`/`commenting_user` 为字符串用户名，评论扁平列表。
@@ -20,16 +15,31 @@
   - 少数派：RSS 2.0 feed，无评论接口。
   - Product Hunt：RSS feed，无评论接口。
 - **base.py 通用助手**：`http_get_json` 支持 `extra_headers`；新增 `http_get_xml` / `parse_atom_feed`（Atom 与 RSS 2.0 兼容）/ `strip_html` / `iso_to_unix`（ISO 8601 与 RFC 2822）。
-- **行为调整**：`get_sources` 改为来源必须出现在 config 配置节且 `enabled: true` 才启用（缺失配置节不再默认启用）。
-- **并行爬取**：`run_crawl` 的来源间并行（`ThreadPoolExecutor`）。不同来源限流互不影响，`request_delay` 各自保护；state 写入加锁防丢键。分析本就并发（批次 × 类别，`max_workers=4`）。
-- **爬取日志带来源标识**：进度行 `[v2ex 10/10] id - title`，并行下可区分来源。
-- **Ctrl+C 优雅退出**：`os._exit(130)` 立即结束并打印提示，不再抛 traceback / 等待工作线程；帖子与列表缓存改原子写，中断不产生损坏文件，下次运行自动断点续传。
-- **分析结论强制中文**：批次 / 合并 prompt 规则强化为「一律用中文回答；即使原文是英文，也要用中文输出」（英文源接入后保证报告仍为中文）。
+- **爬取与 CLI 增强**：来源必须出现在 config 且 enabled 才启用；`run_crawl` 来源间并行（`ThreadPoolExecutor`）；进度日志带来源标识；Ctrl+C 优雅退出（原子写 + 断点续传）；分析结论强制中文。
+- **Web 界面与 Docker 部署**（`web/` + `frontend/` + Dockerfile + docker-compose + nginx `/shibei/` 子路径反代）
+  - 浏览器查看/触发：报告页（全量/今日报告 Markdown 渲染、数据概览）、运行历史（状态 + 实时日志弹窗）、设置页。
+  - 主动触发：增量 / 全量分析按钮；analyzer 子进程运行（`web/runner.py`），单任务并发（运行中触发 409），状态索引 + 日志落盘 `data/tasks/`，重启容器自动标中断。
+  - 停止任务：运行中任务可随时停止（SIGTERM → `interrupted`，已抓数据保留续传）。
+  - 登录保护：scrypt 密码哈希 + 签名会话 cookie；初始账号 `SHIBEI_USERNAME` / `SHIBEI_PASSWORD`。
+  - AI 配置：base_url / model / max_tokens / API Key 界面可存（Key 存 `data/web_secrets.json` 0600）；**连通性测试按钮**（一次最小对话，展示服务商错误）。
+  - 每日定时调度（`web/scheduler.py`）：**默认每天 00:00 增量分析**，可开关、可设时间（5 分钟步进），同天只触发一次（last_fired 落盘）。
+  - Webhook 通知（`web/webhook.py`）：任务完成（成功/失败）时 POST JSON 到配置地址，支持自定义 Header Key + Token，设置页可发测试。
+  - 前端（React 18 + Vite + Tailwind，遵循前端约束规范）：5 主题色 × 明暗、中英双语、悬浮控制按钮组（默认折叠）、favicon；时区仅上海/UTC。
+  - nginx 配置内嵌镜像（`docker/nginx.Dockerfile`），`SHIBEI_BASE_PATH` 可配置子路径。
+- **运行时依赖**：pyproject 声明 flask + waitress（仅 Web 部署需要；CLI 仍零第三方依赖）。
 
-### 计划
+### 修复
+
+- 悬浮按钮组：鼠标移向主题色气泡不再误收起（relatedTarget 判定）；展开/折叠位移 + 透明度动画。
+- 报告任务结束状态区分：`interrupted`（停止/中断）不再误报失败。
+
+### 计划（见 [Unreleased]）
+
+## [Unreleased]
+
 - 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
-- cron 定时部署（Docker + Web 触发已完成）
 - 报告增强：分类标签、历史对比、导出其它格式
+- list_nodes 增强（SSPai / Product Hunt 无节点概念）
 
 ## [0.1.0] - 2026-08-02
 

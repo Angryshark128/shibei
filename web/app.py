@@ -28,6 +28,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -39,9 +40,19 @@ from typing import Any, TypeVar
 from flask import Flask, jsonify, request, send_from_directory, session
 from waitress import serve
 
+from web import settings as web_settings
 from web.runner import TaskManager, TaskRunningError
+from web.scheduler import DailyScheduler
+from web.webhook import send_task_finished, send_test
 
 logger = logging.getLogger("shibei.web")
+
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+class ApiKeyMissingError(Exception):
+    """未配置 LLM API Key，无法启动分析任务。"""
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = REPO_ROOT / "data"
@@ -297,7 +308,7 @@ def create_app() -> Flask:
 
     secrets_store = Secrets()
     config = WebConfig()
-    tasks = TaskManager(REPO_ROOT)
+    tasks = TaskManager(REPO_ROOT, on_finish=send_task_finished)
 
     @app.after_request
     def _no_cache_api(response: Any) -> Any:
@@ -383,6 +394,48 @@ def create_app() -> Flask:
         }
         return jsonify({"llm": llm_view, "sources": config.sources()})
 
+    @app.post("/api/config/test")
+    @require_login
+    @require_same_origin
+    def test_llm() -> Any:
+        """用界面当前表单（或已保存配置）发起一次最小对话，验证连通性。"""
+        data = body_json()
+        llm_in = data.get("llm")
+        base_url = ""
+        model = ""
+        if isinstance(llm_in, dict):
+            base_url = str(llm_in.get("base_url", "")).strip()
+            model = str(llm_in.get("model", "")).strip()
+        saved = config.llm()
+        base_url = base_url or saved["base_url"]
+        model = model or saved["model"]
+        if not base_url.startswith(("http://", "https://")) or not model:
+            return jsonify({"error": "bad_config", "message": "请先填写接口地址与模型名"}), 400
+        env_key = os.environ.get("OPENAI_API_KEY", "")
+        api_key = str(data.get("api_key", "")).strip() or secrets_store.llm_api_key or env_key
+        if not api_key:
+            return jsonify({"error": "no_api_key", "message": "未配置 API Key"}), 400
+
+        from analyzer import _LLM, call_api  # 延迟导入，复用错误透传与重试
+
+        saved_key = os.environ.get("OPENAI_API_KEY")
+        os.environ["OPENAI_API_KEY"] = api_key
+        old_llm = dict(_LLM)
+        _LLM.update({"base_url": base_url.rstrip("/"), "model": model, "max_tokens": "256"})
+        started = time.time()
+        try:
+            call_api("请直接回复：ok", timeout=30, retries=0)
+            return jsonify({"ok": True, "model": model, "latency_ms": int((time.time() - started) * 1000)})
+        except RuntimeError as e:
+            return jsonify({"error": "llm_test_failed", "message": str(e)}), 400
+        finally:
+            _LLM.clear()
+            _LLM.update(old_llm)
+            if saved_key is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
+                os.environ["OPENAI_API_KEY"] = saved_key
+
     @app.put("/api/config")
     @require_login
     @require_same_origin
@@ -453,6 +506,13 @@ def create_app() -> Flask:
             env["OPENAI_API_KEY"] = secrets_store.llm_api_key
         return env
 
+    def _start_task(mode: str) -> dict[str, Any]:
+        """组装环境并启动任务；未配 Key 抛 ApiKeyMissingError，运行中抛 TaskRunningError。"""
+        env = _run_env()
+        if not env.get("OPENAI_API_KEY"):
+            raise ApiKeyMissingError("尚未配置 LLM API Key")
+        return tasks.start(mode, env)
+
     @app.post("/api/run")
     @require_login
     @require_same_origin
@@ -461,11 +521,10 @@ def create_app() -> Flask:
         mode = data.get("mode", "today")
         if mode not in ("today", "full"):
             return jsonify({"error": "bad_mode", "message": "mode 需为 today 或 full"}), 400
-        env = _run_env()
-        if not env.get("OPENAI_API_KEY"):
-            return jsonify({"error": "no_api_key", "message": "尚未配置 LLM API Key，请先到「设置」完成 AI 配置"}), 400
         try:
-            task = tasks.start(mode, env)
+            task = _start_task(mode)
+        except ApiKeyMissingError:
+            return jsonify({"error": "no_api_key", "message": "尚未配置 LLM API Key，请先到「设置」完成 AI 配置"}), 400
         except TaskRunningError as e:
             running = tasks.running()
             return (
@@ -486,6 +545,96 @@ def create_app() -> Flask:
         if not task:
             return jsonify({"error": "not_found", "message": "任务不存在"}), 404
         return jsonify({"task": {**task, "log_tail": tasks.log_tail(task_id, max_chars=4000)}})
+
+    @app.post("/api/tasks/<task_id>/stop")
+    @require_login
+    @require_same_origin
+    def task_stop(task_id: str) -> Any:
+        if not tasks.get(task_id):
+            return jsonify({"error": "not_found", "message": "任务不存在"}), 404
+        if not tasks.stop(task_id):
+            return jsonify({"error": "not_running", "message": "任务不在运行中"}), 409
+        return jsonify({"ok": True})
+
+    # ---------- 每日定时调度 ----------
+
+    @app.get("/api/schedule")
+    @require_login
+    def schedule_get() -> Any:
+        cfg = web_settings.load_schedule()
+        return jsonify(
+            {
+                "enabled": bool(cfg.get("enabled")),
+                "time": str(cfg.get("time", "00:00")),
+                "last_fired": cfg.get("last_fired"),
+            }
+        )
+
+    @app.put("/api/schedule")
+    @require_login
+    @require_same_origin
+    def schedule_put() -> Any:
+        data = body_json()
+        time_value = data.get("time")
+        if time_value is not None:
+            if not isinstance(time_value, str) or not TIME_RE.match(time_value):
+                return jsonify({"error": "bad_time", "message": "时间格式需为 HH:MM"}), 400
+        enabled = data.get("enabled")
+        if enabled is not None and not isinstance(enabled, bool):
+            return jsonify({"error": "bad_enabled", "message": "enabled 需为布尔值"}), 400
+        saved = web_settings.save_schedule(
+            enabled=bool(enabled) if enabled is not None else None,
+            time=time_value if isinstance(time_value, str) else None,
+        )
+        return jsonify({"enabled": bool(saved.get("enabled")), "time": str(saved.get("time", "00:00"))})
+
+    # ---------- Webhook ----------
+
+    def _webhook_view(cfg: dict[str, Any]) -> dict[str, Any]:
+        token = str(cfg.get("token", ""))
+        return {
+            "enabled": bool(cfg.get("enabled")),
+            "url": str(cfg.get("url", "")),
+            "header_key": str(cfg.get("header_key", "")),
+            "has_token": bool(token),
+            "token_hint": ("••••" + token[-4:]) if token else "",
+        }
+
+    @app.get("/api/webhook")
+    @require_login
+    def webhook_get() -> Any:
+        return jsonify(_webhook_view(web_settings.load_webhook()))
+
+    @app.put("/api/webhook")
+    @require_login
+    @require_same_origin
+    def webhook_put() -> Any:
+        data = body_json()
+        url = data.get("url")
+        if url is not None and not str(url).startswith(("http://", "https://")):
+            return jsonify({"error": "bad_url", "message": "Webhook 地址需以 http:// 或 https:// 开头"}), 400
+        token = data.get("token")
+        if token is not None and not isinstance(token, str):
+            return jsonify({"error": "bad_token", "message": "token 需为字符串"}), 400
+        saved = web_settings.save_webhook(
+            enabled=data.get("enabled") if isinstance(data.get("enabled"), bool) else None,
+            url=str(url).strip() if url is not None else None,
+            header_key=str(data.get("header_key", "")).strip() if "header_key" in data else None,
+            token=(token if isinstance(token, str) and token else None) if not data.get("clear_token") else "",
+        )
+        return jsonify(_webhook_view(saved))
+
+    @app.post("/api/webhook/test")
+    @require_login
+    @require_same_origin
+    def webhook_test() -> Any:
+        cfg = web_settings.load_webhook()
+        if not str(cfg.get("url", "")).strip():
+            return jsonify({"error": "no_url", "message": "请先填写 Webhook 地址"}), 400
+        sent = send_test()
+        if not sent:
+            return jsonify({"error": "send_failed", "message": "发送失败，请检查地址与网络"}), 502
+        return jsonify({"ok": True})
 
     # ---------- 报告 ----------
 
@@ -530,6 +679,10 @@ def create_app() -> Flask:
         if request.path.startswith("/api/"):
             return jsonify({"error": "not_found", "message": "接口不存在"}), 404
         return index()
+
+    # 每日定时调度（守护线程；触发增量分析）
+    scheduler = DailyScheduler(lambda: _start_task("today"))
+    scheduler.start()
 
     return app
 

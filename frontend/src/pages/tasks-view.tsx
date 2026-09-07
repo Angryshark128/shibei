@@ -1,10 +1,11 @@
-import { FileText, History, Loader2 } from "lucide-react";
+import { FileText, History, Loader2, Square } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm";
 import { Modal } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty";
 import { ErrorBlock } from "@/components/ui/error";
@@ -53,6 +54,8 @@ export function TasksView() {
   const [tasks, setTasks] = useState<TaskItem[] | null>(null);
   const [error, setError] = useState(false);
   const [logTask, setLogTask] = useState<TaskItem | null>(null);
+  const [stopTask, setStopTask] = useState<TaskItem | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [logContent, setLogContent] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
   const [logError, setLogError] = useState(false);
@@ -155,14 +158,27 @@ export function TasksView() {
                       {formatDuration(task.started_at, task.finished_at)}
                     </td>
                     <td className="px-6 py-3 text-right">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        icon={<FileText className="h-4 w-4" aria-hidden="true" />}
-                        onClick={() => void openLog(task)}
-                      >
-                        {t("tasks.actionLog")}
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        {task.status === "running" && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={<Square className="h-4 w-4" aria-hidden="true" />}
+                            className="text-rose-600 hover:text-rose-700 dark:text-rose-400 dark:hover:text-rose-300"
+                            onClick={() => setStopTask(task)}
+                          >
+                            {t("tasks.stopLabel")}
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={<FileText className="h-4 w-4" aria-hidden="true" />}
+                          onClick={() => void openLog(task)}
+                        >
+                          {t("tasks.actionLog")}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -205,6 +221,34 @@ export function TasksView() {
           <p className="py-4 text-sm text-ink-500 dark:text-surface-4">{t("tasks.logEmpty")}</p>
         )}
       </Modal>
+
+      {/* 停止任务确认 */}
+      <ConfirmDialog
+        open={stopTask != null}
+        onOpenChange={(open) => {
+          if (!open) setStopTask(null);
+        }}
+        title={t("tasks.stopConfirmTitle")}
+        message={t("tasks.stopConfirmMessage")}
+        confirmLabel={t("tasks.stopLabel")}
+        danger
+        confirmLoading={stopping}
+        onConfirm={() => {
+          if (!stopTask) return;
+          setStopping(true);
+          api
+            .stopTask(stopTask.id)
+            .then(() => {
+              toast.push("success", t("tasks.stopSent"));
+              setStopTask(null);
+            })
+            .catch(() => {
+              toast.push("error", t("tasks.statusFailed"));
+              setStopTask(null);
+            })
+            .finally(() => setStopping(false));
+        }}
+      />
     </div>
   );
 }

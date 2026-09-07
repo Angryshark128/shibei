@@ -8,16 +8,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 MAX_KEPT_TASKS = 30  # 索引与日志最多保留的任务数
+
+logger = logging.getLogger("shibei.runner")
 
 
 class TaskRunningError(Exception):
@@ -31,13 +35,19 @@ def _now() -> float:
 class TaskManager:
     """管理 analyzer 子进程任务的生命周期。"""
 
-    def __init__(self, repo_root: Path) -> None:
+    def __init__(
+        self,
+        repo_root: Path,
+        on_finish: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.repo_root = repo_root.resolve()
+        self._on_finish = on_finish
         self.tasks_dir = self.repo_root / "data" / "tasks"
         self.index_file = self.tasks_dir / "index.json"
         self.tasks_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._tasks: dict[str, dict[str, Any]] = {}
+        self._procs: dict[str, subprocess.Popen[Any]] = {}
         self._load_index()
         self._mark_interrupted_on_boot()
 
@@ -138,6 +148,8 @@ class TaskManager:
             stderr=subprocess.STDOUT,
             text=True,
         )
+        with self._lock:
+            self._procs[task_id] = proc
 
         def _wait() -> None:
             try:
@@ -148,14 +160,44 @@ class TaskManager:
                 log_fh.close()
             with self._lock:
                 t = self._tasks.get(task_id)
+                stopped = bool(t and t.get("stop_requested"))
                 if t:
-                    t["status"] = "succeeded" if exit_code == 0 else "failed"
+                    # SIGTERM（stop/中断）→ interrupted；exit 0 → succeeded；其余 → failed
+                    if stopped or exit_code < 0:
+                        t["status"] = "interrupted"
+                    else:
+                        t["status"] = "succeeded" if exit_code == 0 else "failed"
                     t["exit_code"] = exit_code
                     t["finished_at"] = _now()
                     self._save_index()
+                self._procs.pop(task_id, None)
+            # 任务结束回调（Webhook 通知等），在守护线程中执行
+            snapshot = dict(t) if t else {}
+            if snapshot and self._on_finish:
+                try:
+                    self._on_finish(snapshot)
+                except Exception:
+                    logger.exception("任务完成回调异常")
 
         threading.Thread(target=_wait, daemon=True, name=f"task-{task_id}").start()
         return dict(task)
+
+    # ---------- 停止 ----------
+
+    def stop(self, task_id: str) -> bool:
+        """请求停止运行中的任务（SIGTERM 子进程，状态落 interrupted）。返回是否成功发起。"""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            proc = self._procs.get(task_id)
+            if not task or task.get("status") != "running":
+                return False
+            task["stop_requested"] = True
+        if proc:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        return True
 
     # ---------- 日志 ----------
 

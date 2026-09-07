@@ -71,4 +71,18 @@ export interface MeResponse {
   username: string;
 }
 
+export interface ScheduleConfig {
+  enabled: boolean;
+  time: string; // HH:MM
+  last_fired?: string | null;
+}
+
+export interface WebhookConfig {
+  enabled: boolean;
+  url: string;
+  header_key: string;
+  has_token: boolean;
+  token_hint: string;
+}
+
 export type ViewId = "reports" | "tasks" | "settings" | "help";
