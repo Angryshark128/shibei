@@ -1,0 +1,35 @@
+services:
+  web:
+    build: .
+    image: shibei:local
+    container_name: shibei-web
+    restart: unless-stopped
+    environment:
+      # 初始管理员凭据：仅在首次启动（无 data/web_secrets.json）时生效
+      SHIBEI_USERNAME: ${SHIBEI_USERNAME:-admin}
+      SHIBEI_PASSWORD: ${SHIBEI_PASSWORD:?请在 .env 中设置 SHIBEI_PASSWORD}
+      SHIBEI_BASE_PATH: /shibei/
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      # 抓取数据 / 报告 / 运行时配置 / 凭据全部持久化在宿主 ./data
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx.Dockerfile
+    image: shibei-nginx:local
+    container_name: shibei-nginx
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "${SHIBEI_HTTP_PORT:-8080}:80"
+
+# 使用：cp .env.example .env（填写 SHIBEI_PASSWORD）后 docker compose up -d --build
+# 访问：http://<host>:8080/shibei/

@@ -1,5 +1,33 @@
 # 拾贝 · 项目状态
 
+## [2026-09-07] Web 界面 + Docker 部署
+
+### 现状
+- **Web 后端**（`web/app.py` + `web/runner.py`，Flask + waitress）
+  - 登录保护：scrypt 密码哈希 + 签名会话 cookie（path 随 `SHIBEI_BASE_PATH`）；初始账号 `SHIBEI_USERNAME` / `SHIBEI_PASSWORD`，未设密码自动生成打印日志。
+  - AI 配置：base_url / model / max_tokens 落 `data/web_config.json` 并同步仓库 `config.json`（CLI 与 Web 一致）；API Key 存 `data/web_secrets.json`（0600）不进仓库。
+  - 来源开关（PUT /api/sources/{name}）、改密、`/api/reports|tasks|run` 等接口。
+  - 任务运行：analyzer 子进程，单任务并发（运行中触发 409），状态索引 + 日志落 `data/tasks/`，重启容器标 interrupted。
+  - CSRF：JSON 写接口校验 Origin hostname（nginx `$host` 无端口，勿用 netloc 全等比较）。
+- **前端**（`frontend/`，React 18 + Vite + Tailwind，遵循 Trilium 前端约束规范）
+  - 页面：登录（居中卡片）/ 报告（概览统计 + 全量/今日报告 + 增量/全量触发 + 运行 banner）/ 运行历史（表格 + 日志 Modal）/ 设置（AI/来源开关/改密/时区）/ 帮助。
+  - 令牌体系：5 主题色（indigo 默认）× 明暗双轴，CSS 变量 RGB 通道 + `<alpha-value>`；悬浮控制按钮组（默认折叠，hover 展开）；中英双语 i18n；dayjs 6 时区。
+  - 构建：`VITE_BASE=/shibei/` 产物进镜像；tsc 全绿、vite build 通过。
+- **部署**：Dockerfile（node 多阶段 → python:3.12-slim）+ docker-compose（web + nginx 反代 `/shibei/`）；nginx 配置**内嵌镜像**（docker/nginx.Dockerfile）——本机 daemon 对 `/home/shark` 下单文件 bind 挂载异常（文件被当目录），改 COPY 规避。
+- **质量**：ruff / pyright 0 错；pytest 108 全绿（web 冒烟另用 API 脚本 15 项 + docker 内 e2e：子路径页面/静态/登录/cookie path/配置/报告/任务 409/真实 analyzer 子进程日志均过）。
+- 注：uv.lock 已含 flask/waitress（pyproject dependencies 更新）；config.json 的运行时同步由 `data/web_config.json` 驱动（本地直接跑 web 会改仓库 config.json → 用后 git checkout 还原）。
+
+### 计划
+1. 更多来源：Reddit（OAuth）、即刻（逆向）等。
+2. cron 定时部署（Web 触发已就绪）。
+
+### 待办
+- [x] Docker 镜像 + Web 界面（查看/触发/配置/登录/子路径）— P0
+- [ ] 生产部署（目标机 `docker compose up -d --build` + 外层 HTTPS）
+- [ ] list_nodes 增强（SSPai / Product Hunt 无节点概念）— P4
+- [ ] 报告增强：分类标签、历史对比、导出其它格式 — P2
+- [ ] v0.2.0 发布（README/CHANGELOG 已更新待 tag）
+
 ## [2026-08-03] 多来源接入（5 个新来源）
 
 ### 现状

@@ -6,6 +6,13 @@
 
 ### 新增
 
+- **Web 界面与 Docker 部署**（Dockerfile + docker-compose + nginx 子路径反代）
+  - 浏览器查看/触发：报告页（全量/增量报告 Markdown 渲染、数据概览）、运行历史（任务状态 + 实时日志）、设置页（AI 模型、来源开关、账号改密、显示时区）。
+  - 主动触发：增量 / 全量分析按钮，子进程运行 analyzer（`web/runner.py`），单任务并发、状态索引与日志落盘，断容器可恢复。
+  - 登录保护：scrypt 密码哈希 + 签名会话 cookie；初始账号来自 `SHIBEI_USERNAME` / `SHIBEI_PASSWORD` 环境变量。
+  - AI 配置：base_url / model / max_tokens 写入 `data/web_config.json` 并同步仓库 `config.json`（CLI 与 Web 一致）；API Key 仅存 `data/web_secrets.json`（0600）。
+  - 前端：React 18 + Vite + Tailwind（前端约束规范：5 主题色 × 明暗、中英双语、悬浮控制按钮组），构建产物打进镜像。
+- **运行时依赖**：pyproject 声明 flask + waitress（仅 Web 部署需要；CLI 仍零第三方依赖）。
 - **多来源接入**（sources/ 新增 5 个实现 + 注册 + config 配置节）
   - Hacker News：Firebase JSON API，列表端点二次请求详情，评论 BFS 递归展平，deleted/dead 跳过。
   - Lobste.rs：JSON API，按标签分页；`submitter_user`/`commenting_user` 为字符串用户名，评论扁平列表。
@@ -21,7 +28,7 @@
 
 ### 计划
 - 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
-- Docker 镜像与 cron 定时部署
+- cron 定时部署（Docker + Web 触发已完成）
 - 报告增强：分类标签、历史对比、导出其它格式
 
 ## [0.1.0] - 2026-08-02

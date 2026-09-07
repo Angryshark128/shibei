@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>拾贝 · 社区情报</title>
+    <script>
+      // 首帧恢复主题偏好，避免刷新闪白（规范 03：theme/colorScheme 双轴）
+      (function () {
+        try {
+          var theme = localStorage.getItem("theme") || "indigo";
+          var scheme = localStorage.getItem("colorScheme") || "light";
+          document.documentElement.setAttribute("data-theme", theme);
+          document.documentElement.classList.toggle("dark", scheme === "dark");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

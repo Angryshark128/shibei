@@ -1,0 +1,140 @@
+/* ============================================================
+   拾贝 · 全局样式（前端约束规范 02/03）
+   主题双轴：data-theme 切主题色（brand 色阶），.dark 切明暗
+   变量存 RGB 通道，供 tailwind <alpha-value> 透明度修饰
+   ============================================================ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- 主题双轴一：主题色（决定 brand 色阶） ---------- */
+/* 默认主题 indigo（未写 data-theme 时即此套） */
+:root,
+[data-theme="indigo"] {
+  --brand-50: 238 242 255;
+  --brand-100: 224 231 255;
+  --brand-300: 165 180 252;
+  --brand-400: 129 140 248;
+  --brand-500: 99 102 241;
+  --brand-600: 79 70 229;
+  --brand-700: 67 56 202;
+  --brand-900: 49 46 129;
+}
+[data-theme="emerald"] {
+  --brand-50: 236 253 245;
+  --brand-100: 209 250 229;
+  --brand-300: 110 231 183;
+  --brand-400: 52 211 153;
+  --brand-500: 16 185 129;
+  --brand-600: 5 150 105;
+  --brand-700: 4 120 87;
+  --brand-900: 6 78 59;
+}
+[data-theme="rose"] {
+  --brand-50: 255 241 242;
+  --brand-100: 255 228 230;
+  --brand-300: 253 164 175;
+  --brand-400: 251 113 133;
+  --brand-500: 244 63 94;
+  --brand-600: 225 29 72;
+  --brand-700: 190 18 60;
+  --brand-900: 136 19 55;
+}
+[data-theme="amber"] {
+  --brand-50: 255 251 235;
+  --brand-100: 254 243 199;
+  --brand-300: 252 211 77;
+  --brand-400: 251 191 36;
+  --brand-500: 245 158 11;
+  --brand-600: 217 119 6;
+  --brand-700: 180 83 9;
+  --brand-900: 120 53 15;
+}
+[data-theme="slate"] {
+  --brand-50: 248 250 252;
+  --brand-100: 241 245 249;
+  --brand-300: 203 213 225;
+  --brand-400: 148 163 184;
+  --brand-500: 100 116 139;
+  --brand-600: 71 85 105;
+  --brand-700: 51 65 85;
+  --brand-900: 15 23 42;
+}
+
+/* ---------- 中性色（明暗共享的固定令牌） ---------- */
+:root {
+  --surface-0: 255 255 255;
+  --surface-1: 250 250 250;
+  --surface-2: 244 244 245;
+  --surface-3: 228 228 231;
+  --surface-4: 212 212 216;
+  --ink-900: 24 24 27;
+  --ink-700: 63 63 70;
+  --ink-500: 113 113 122;
+  --ink-400: 161 161 170;
+}
+
+/* ---------- 基础 ---------- */
+@layer base {
+  body {
+    @apply bg-surface-2 text-ink-900 transition-colors duration-200 dark:bg-ink-900 dark:text-surface-0;
+  }
+  :focus-visible {
+    @apply ring-2 ring-brand-500/40 outline-none;
+  }
+  button {
+    cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--surface-4));
+    border-radius: 9999px;
+  }
+  .dark .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgb(var(--ink-700));
+  }
+}
+
+/* ---------- Markdown 报告排版 ---------- */
+.md-report {
+  @apply text-sm leading-6 text-ink-700 dark:text-surface-4;
+}
+.md-report h1 {
+  @apply mb-4 border-b border-surface-3 pb-2 text-xl font-bold text-ink-900 dark:border-ink-700 dark:text-surface-0;
+}
+.md-report h2 {
+  @apply mt-8 mb-3 text-base font-semibold text-brand-700 dark:text-brand-300;
+}
+.md-report p {
+  @apply mb-3;
+}
+.md-report ul {
+  @apply list-disc space-y-2 pl-5;
+}
+.md-report a {
+  @apply break-all text-brand-600 underline-offset-2 hover:text-brand-700 hover:underline dark:text-brand-400;
+}
+.md-report strong {
+  @apply font-semibold text-ink-900 dark:text-surface-0;
+}
+.md-report hr {
+  @apply my-6 border-surface-3 dark:border-ink-700;
+}

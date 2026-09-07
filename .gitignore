@@ -16,6 +16,14 @@ __pycache__/
 # 运行时数据：抓取结果与缓存（不入库）
 data/
 
+# Web 前端
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# .env 忽略，但示例保留入库
+!.env.example
+
 # 编辑器/系统
 .DS_Store
 .idea/

@@ -1,0 +1,16 @@
+data/
+.git/
+.venv/
+**/__pycache__/
+*.pyc
+*.egg-info/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.env
+.env.*
+!.env.example
+tests/
+docs/
+examples/
+*.md

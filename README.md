@@ -2,7 +2,7 @@
 
 **面向独立开发者的社区情报工具**：从 V2EX 等社区抓取帖子，调用 LLM 提炼**创意 / 痛点 / 独立开发机会 / 趋势洞察**，输出带可点击原帖链接的 Markdown 报告，帮你低成本发现「值得做的东西」。
 
-![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![Dependencies](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![CLI](https://img.shields.io/badge/CLI%20deps-0-brightgreen) ![Web](https://img.shields.io/badge/Web-Flask%20%2B%20React-blue)
 
 ## 特性
 
@@ -10,7 +10,7 @@
 - **单一入口**：`analyzer.py` 一个命令自动完成「爬取 → 分析 → 打印报告绝对路径」，无需手动干预是否爬取。
 - **自动增量 / 全量**：有数据时只抓新增、只分析新增；首次运行或数据为空时自动全量。
 - **来源可插拔**：新增社区只需实现一个来源类并注册，主流程与分析模块不动。
-- **零运行时依赖**：只用标准库 `urllib`，开箱即跑。
+- **CLI 零第三方依赖**：命令行工具只用标准库 `urllib`，开箱即跑；Web 界面独立提供，不影响 CLI。
 - **LLM 自带 URL + Key**：只支持 OpenAI 协议（DeepSeek / OpenRouter / Ollama / vLLM 等均兼容），URL 与 Key 缺失即退出，不误发到官方端点。
 - **可点击来源**：报告每条洞察的「来源帖子」是代码还原的真实原帖链接，不经过 LLM，杜绝杜撰 URL。
 - **省成本**：今日列表缓存 + 分析 run_id 缓存，重跑不重复请求；正文/回复截断控制 token。
@@ -24,17 +24,7 @@
 | **网络** | 能访问来源社区 API（V2EX / Hacker News / Lobste.rs / Dev.to / 少数派 / Product Hunt）用于爬取；能访问你自带的 LLM API（OpenAI 兼容）用于分析 |
 | **LLM 配置** | `OPENAI_API_KEY`（环境变量，必填）；`OPENAI_BASE_URL` 与 `ANALYZE_MODEL` 必填（环境变量或 config.json `llm` 节二选一） |
 
-> 运行时零依赖：装好 Python 后可直接 `python3 analyzer.py` 运行；uv 与 dev 依赖（ruff / pytest / pyright / pre-commit）仅用于开发与测试。
-
-## 工作原理
-
-- **单一入口**：`analyzer.py` 一个命令自动完成「爬取 → 分析 → 打印报告绝对路径」，无需手动干预是否爬取。
-- **自动增量 / 全量**：有数据时只抓新增、只分析新增；首次运行或数据为空时自动全量。
-- **来源可插拔**：新增社区只需实现一个来源类并注册，主流程与分析模块不动。
-- **零运行时依赖**：只用标准库 `urllib`，开箱即跑。
-- **LLM 自带 URL + Key**：只支持 OpenAI 协议（DeepSeek / OpenRouter / Ollama / vLLM 等均兼容），URL 与 Key 缺失即退出，不误发到官方端点。
-- **可点击来源**：报告每条洞察的「来源帖子」是代码还原的真实原帖链接，不经过 LLM，杜绝杜撰 URL。
-- **省成本**：今日列表缓存 + 分析 run_id 缓存，重跑不重复请求；正文/回复截断控制 token。
+> 运行时零依赖：CLI 装好 Python 后可直接 `python3 analyzer.py` 运行；uv 与 dev 依赖（ruff / pytest / pyright / pre-commit）仅用于开发与测试。Web 部署用 Docker，见下文。
 
 ## 工作原理
 
@@ -112,6 +102,69 @@ $ uv run python analyzer.py
 ```
 
 > 说明：以上为示例输出；实际内容由你的 LLM 从抓取的帖子中提炼。
+
+## Web 界面（Docker 部署）
+
+自带浏览器界面：**查看报告、手动触发分析、配置 AI 与来源开关**，登录保护，可部署在任意站点子路径（nginx 反代）。
+
+```
+浏览器 ── /shibei/ ──▶ nginx（反代，剥前缀）──▶ Flask(:8000) ──▶ analyzer 子进程 ──▶ data/
+                └── 前端静态资源（构建进镜像）
+```
+
+### 功能
+
+- **登录保护**：用户名 + 密码（scrypt 哈希落盘），会话 cookie；登录页右下角可切换主题/语言。
+- **报告**：全量报告与今日增量报告（Markdown 渲染，来源帖子可点击跳原帖）；数据概览统计。
+- **主动触发**：增量分析 / 全量分析按钮，运行状态实时反馈，完整日志可在「运行历史」查看。
+- **AI 配置**：接口地址 / 模型 / API Key / 最大 Token 均可在界面保存；API Key 只存本机（`data/web_secrets.json`，0600），不入库不进 config.json。
+- **来源开关**：停用不需要的社区。
+- **主题**：5 主题色 × 明暗，中英双语，符合[前端约束规范]设计令牌体系。
+
+### 快速开始
+
+```bash
+# 1. 配置初始管理员密码（必填；其余可用默认）
+cp .env.example .env          # 编辑 SHIBEI_PASSWORD
+# 2. 构建并启动（web + nginx 反代）
+docker compose up -d --build
+# 3. 访问 http://<host>:8080/shibei/ 并登录
+```
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `SHIBEI_PASSWORD` | 无（未设置则自动生成并打印到容器日志） | 初始管理员密码，仅首次启动建号时生效 |
+| `SHIBEI_USERNAME` | `admin` | 初始管理员用户名 |
+| `SHIBEI_HTTP_PORT` | `8080` | nginx 对外端口（浏览器访问端口） |
+| `SHIBEI_BASE_PATH` | `/shibei/` | 浏览器侧访问前缀，需与 nginx `location` 一致 |
+| `TZ` | `Asia/Shanghai` | 容器时区 |
+
+要点：
+
+- 数据全部持久化在宿主 `./data`（帖子、报告、`web_config.json`、凭据），容器重建不丢；删除该目录即重置。
+- 改完 `.env` 后 `docker compose up -d` 重建生效；已建号后改 `SHIBEI_PASSWORD` 不生效，可在界面「设置 → 账号」改密。
+- 前端在容器内以 `VITE_BASE=/shibei/` 构建；若自定义 `SHIBEI_BASE_PATH`，需同步修改 `docker-compose.yml` 中 `SHIBEI_BASE_PATH`、`deploy/nginx.conf` 的 `location` 与镜像构建参数 `VITE_BASE`（`docker compose build --build-arg VITE_BASE=/xxx/`）。
+- 需要 HTTPS / 域名：在更外层网关（如 Caddy / Nginx Proxy Manager）把流量转给本 compose 的 `8080` 即可，或自行加证书。
+
+### 架构与目录
+
+| 部分 | 说明 |
+|---|---|
+| `frontend/` | React 18 + Vite + Tailwind + shadcn/ui 风格组件，构建产物进镜像 |
+| `web/app.py` | Flask 应用：登录会话 / AI 配置 / 来源开关 / 任务 API / 静态托管 |
+| `web/runner.py` | analyzer 子进程管理：单任务并发、状态索引与日志落盘 `data/tasks/` |
+| `deploy/nginx.conf` | `/shibei/` 子路径反代示例（剥前缀转发 `web:8000`） |
+| `Dockerfile` | 多阶段：node 构建前端 → python:3.12-slim（flask + waitress） |
+
+### 本地开发
+
+```bash
+# 后端（需 Python ≥3.10；uv 安装依赖）
+uv sync
+SHIBEI_BASE_PATH=/ SHIBEI_PASSWORD=dev123 uv run python -m web.app   # :8000
+# 前端（另开终端；/shibei/api 自动代理到 :8000）
+cd frontend && npm install && npm run dev                             # :5173
+```
 
 ## 配置
 
@@ -263,7 +316,8 @@ uv run pre-commit run --all-files        # 见 .pre-commit-config.yaml
 ## 路线图
 
 - [ ] 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
-- [ ] Docker 镜像与 cron 定时部署
+- [x] Docker 镜像 + Web 界面（报告查看 / 主动触发 / AI 配置 / 登录，nginx 子路径部署）
+- [ ] cron 定时部署（Web 触发已就绪，定期自动运行尚未内置）
 - [ ] 报告增强：分类标签、历史对比、导出其它格式
 
 ## 贡献
