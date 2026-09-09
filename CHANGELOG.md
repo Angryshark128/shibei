@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-09-09
+
+报告按日归档与按日导航、favicon 服务、抓取超时收敛；默认停用 Hacker News 来源。
+
+### 新增
+
+- **每日报告归档**：增量报告从覆盖式 `analysis_today.md` 改为按日归档 `data/analysis/YYYY-MM-DD.md`（每天一份、同日多次运行刷新），历史可回溯。
+- **报告页按日导航**：Web 报告页新增「每日报告」视图——默认定位最新一天，支持 ◀▶ 逐日与日期胶囊切换；「全量总览」为独立 tab。API 报告列表区分 `daily`/`full` 并按日期倒序（`latest_daily` 供默认定位），详情接口白名单校验日期格式。
+- **favicon.ico**：16/32/48 多尺寸 favicon（ICO 内嵌 PNG）；新增 `/favicon.ico`、`/favicon.svg` 静态服务路由（此前 svg 从未被 Flask 托管，浏览器一直无图标）。
+- **部署参数化补登**：docker-compose / docker/nginx.Dockerfile 前缀参数化（`SHIBEI_BASE_PATH` / `SHIBEI_TAG`，09-08 生产环境已使用）；Dockerfile 与 compose 支持 `PIP_INDEX_URL` 自定义 pip 源（国内主机可用镜像站，如腾讯云）。
+
+### 修复
+
+- **运行历史开始时间错乱（显示 1970-01-22）**：任务时间戳为秒级 epoch，前端按毫秒解析导致；`time.ts` 统一做秒→毫秒归一化。
+- 「没有新增帖子」的提示改为指向最近一份每日归档。
+
+### 变更
+
+- **默认停用 Hacker News 来源**（`config.json` `enabled=false`，设置页可随时重新启用）：增量任务曾因 HN 逐条评论串行抓取 + 30s 超时 × 3 重试，单源耗时约 141 分钟（一次增量任务总时长 211m）。
+- **抓取超时收敛防黑洞**：全局网络超时 30s → 10s；HN 评论抓取单帖上限 25 条、失败降为重试 1 次；V2EX `max_retries` 降为 1。
+
 ## [0.2.0] - 2026-09-07
 
 从「V2EX 单源 CLI」到「多来源 + Web 界面 + Docker 部署」的完整发布。
