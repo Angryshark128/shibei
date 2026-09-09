@@ -22,10 +22,10 @@
       ],
       "pages_per_node": 6,
       "request_delay": 1.2,
-      "max_retries": 3
+      "max_retries": 1
     },
     "hackernews": {
-      "enabled": true,
+      "enabled": false,
       "nodes": [
         "show",
         "ask",
@@ -33,7 +33,7 @@
       ],
       "pages_per_node": 3,
       "request_delay": 0.5,
-      "max_retries": 3
+      "max_retries": 1
     },
     "lobsters": {
       "enabled": true,

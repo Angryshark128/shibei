@@ -15,7 +15,7 @@ from typing import Any
 from models import Post, Reply
 
 DEFAULT_USER_AGENT = "ShiBei-Crawler/1.0"
-DEFAULT_TIMEOUT = 30  # 秒
+DEFAULT_TIMEOUT = 10  # 秒。社区 API 正常响应 <5s；30s 超时 ×3 重试会把偶发慢源拖成小时级黑洞（V2EX / HN 事故记录）
 MAX_BACKOFF = 60  # 指数退避上限（秒）
 
 

@@ -42,7 +42,8 @@ class HNSource(Source):
 
         posts: list[Post] = []
         for item_id in page_ids:
-            item = http_get_json(f"{API_BASE}/item/{item_id}.json", retries=self.max_retries)
+            # 单帖详情价值低：失败快速跳过，不重试拖垮整页列表（黑洞防护）
+            item = http_get_json(f"{API_BASE}/item/{item_id}.json", retries=1)
             if (
                 isinstance(item, dict)
                 and item.get("type") == "story"
@@ -52,8 +53,12 @@ class HNSource(Source):
                 posts.append(self._normalize_topic(item, node))
         return posts
 
+    # 单帖最多拉取的评论 item 数：HN 热帖评论树可达上千，超过即放弃剩余，
+    # 避免逐条串行重试把单帖拖成小时级黑洞（2026-09 故障记录）
+    MAX_COMMENT_FETCH = 25
+
     def fetch_replies(self, topic_id: str) -> list[Reply]:
-        item = http_get_json(f"{API_BASE}/item/{topic_id}.json", retries=self.max_retries)
+        item = http_get_json(f"{API_BASE}/item/{topic_id}.json", retries=1)
         if not isinstance(item, dict):
             return []
         return self._flatten_comments(item.get("kids") or [])[:MAX_REPLIES]
@@ -62,12 +67,18 @@ class HNSource(Source):
         return [{"name": n, "title": NODE_TITLES.get(n, n)} for n in NODE_MAP]
 
     def _flatten_comments(self, kids: list[int]) -> list[Reply]:
-        """递归展平评论树，BFS 顺序取前 MAX_REPLIES 条；deleted/dead 跳过且不深入。"""
+        """BFS 展平评论树，取前 MAX_REPLIES 条有效评论；deleted/dead 跳过。
+
+        单条失败即跳过、至多请求 MAX_COMMENT_FETCH 个评论 item——HN 热帖评论树可达上千，
+        逐条串行加重试会把单帖拖成小时级黑洞；分析只需前几条代表性评论。
+        """
         replies: list[Reply] = []
         queue = deque(kids)
-        while queue and len(replies) < MAX_REPLIES:
+        fetched = 0
+        while queue and len(replies) < MAX_REPLIES and fetched < self.MAX_COMMENT_FETCH:
             cid = queue.popleft()
-            item = http_get_json(f"{API_BASE}/item/{cid}.json", retries=self.max_retries)
+            fetched += 1
+            item = http_get_json(f"{API_BASE}/item/{cid}.json", retries=1)
             if not isinstance(item, dict) or item.get("type") != "comment" or item.get("deleted") or item.get("dead"):
                 continue
             replies.append(
