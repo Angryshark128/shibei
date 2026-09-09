@@ -131,7 +131,7 @@ def test_analyze_end_to_end(env, monkeypatch):
     assert set(merged) == {"好的创意/产品点子", "用户痛点", "个人开发者机会", "趋势洞察"}
     for text in merged.values():
         assert "[标题1](https://www.v2ex.com/t/1)" in text  # [#1] 已还原
-    assert calls["count"] == 8 + 4
+    assert calls["count"] == 8 + 4 + 4  # 8 批次 + 4 类合并 + 4 类子主题分组
     # 缓存已清理
     assert not list(analyzer.CACHE_DIR.glob("*.json"))
 
@@ -154,7 +154,7 @@ def test_analyze_cache_hit(env, monkeypatch):
         lambda prompt, **kw: (calls.__setitem__("count", calls["count"] + 1), "[#1] 洞察")[1],
     )
     analyzer.analyze(topics)
-    assert calls["count"] == 4  # 只有合并调用，8 次批次分析全命中缓存
+    assert calls["count"] == 4 + 4  # 4 类合并 + 4 类子主题分组（8 次批次分析全命中缓存）
 
 
 def test_analyze_single_batch_no_merge(env, monkeypatch):
@@ -166,7 +166,7 @@ def test_analyze_single_batch_no_merge(env, monkeypatch):
         lambda prompt, **kw: (calls.__setitem__("count", calls["count"] + 1), "[#1] 洞察")[1],
     )
     analyzer.analyze(topics)
-    assert calls["count"] == 4  # 1 批 × 4 类，无合并
+    assert calls["count"] == 4 + 4  # 1 批 × 4 类（批次）+ 4 类子主题分组；无合并
 
 
 # ---------- load_topics ----------
@@ -439,3 +439,51 @@ def test_main_missing_key_exits(env, monkeypatch, capsys):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(SystemExit):
         analyzer.main([])
+
+
+# ---------- 报告子主题分组（organize_topics） ----------
+
+
+def test_organize_topics_groups_into_h3(monkeypatch):
+    # LLM 正常返回带 ### 的分组文本 → 原样保留（报告按 H3 子主题分节）
+    monkeypatch.setattr(
+        analyzer,
+        "call_api",
+        lambda prompt, **kw: "### 效率工具\n- [#1] 洞察A\n### 生态\n- [#2] 洞察B",
+    )
+    out = analyzer.organize_topics("some merged text", "好的创意/产品点子")
+    assert "### 效率工具" in out
+    assert "### 生态" in out
+    assert "[#2] 洞察B" in out
+
+
+def test_organize_topics_empty_input_returns_as_is(monkeypatch):
+    def boom(*a, **kw):
+        raise AssertionError("空输入不应触发 LLM 调用")
+
+    monkeypatch.setattr(analyzer, "call_api", boom)
+    assert analyzer.organize_topics("", "好的创意/产品点子") == ""
+    assert analyzer.organize_topics("   \n", "好的创意/产品点子") == "   \n"
+
+
+def test_organize_topics_fallback_on_error(monkeypatch):
+    # LLM 异常 → 回退原样文本，不影响报告
+    def boom(*a, **kw):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(analyzer, "call_api", boom)
+    src = "- [#1] 洞察A"
+    assert analyzer.organize_topics(src, "好的创意/产品点子") == src
+
+
+def test_organize_topics_fallback_on_empty_reply(monkeypatch):
+    monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "  ")
+    src = "- [#1] 洞察A"
+    assert analyzer.organize_topics(src, "好的创意/产品点子") == src
+
+
+def test_build_organize_prompt_keeps_marker_rule():
+    prompt = analyzer.build_organize_prompt("内容", "用户痛点")
+    assert "只做整理分组" in prompt
+    assert "[#帖子ID]" in prompt
+    assert "### 子主题名" in prompt

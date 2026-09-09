@@ -231,6 +231,38 @@ def build_merge_prompt(results: list[str], incremental: bool) -> str:
 {body}"""
 
 
+def build_organize_prompt(text: str, category_title: str) -> str:
+    """分组整理 prompt：只做「子主题分组」，不增删改条目。"""
+    return f"""以下是「{category_title}」类的分析条目列表。请只做整理分组，不要增删或改写任何条目。
+
+规则：
+- 不新增、不删除、不改写任何条目的含义；每条保留 `[#帖子ID]` 来源标注
+- 把主题相近的条目归为一组：每组先用一行 `### 子主题名` 开头（子主题名不超过 10 字），随后列出该组全部条目
+- 组数最多 8 组；条目过于零散、无法合理分组时，原样输出整个列表（不要添加任何 ### 行）
+- 组间按价值从高到低排列
+- 一律用中文回答；即使原文是英文，也要用中文输出
+
+---待整理内容---
+
+{text}"""
+
+
+def organize_topics(text: str, category_title: str) -> str:
+    """把合并后的单个分类文本按子主题分组（输出 H3 小节），失败时原样回退。
+
+    分组只是展示优化：任何异常（LLM 失败/空返回）都不影响报告内容本身。
+    """
+    if not text or not text.strip():
+        return text
+    try:
+        grouped = call_api(build_organize_prompt(text, category_title), timeout=180)
+    except Exception:
+        return text
+    if not grouped or not grouped.strip():
+        return text
+    return grouped
+
+
 # ---------- 合并与链接还原 ----------
 
 
@@ -321,9 +353,18 @@ def analyze(topics: list[Post], incremental: bool = False) -> dict[str, str]:
             for fut, key in ((ex.submit(merge_results, per_key[key], incremental), key) for key, _, _ in CATEGORIES)
         }
 
+        # 合并后的单分类文本再按子主题分组（H3 小节；失败自动回退原样，见 organize_topics）
+        grouped_raw = {
+            key: fut.result()
+            for fut, key in (
+                (ex.submit(organize_topics, merged_raw[key], title), key)
+                for key, title, _ in CATEGORIES
+            )
+        }
+
     result: dict[str, str] = {}
     for key, title, _ in CATEGORIES:
-        result[title] = restore_links(merged_raw[key], id2link)
+        result[title] = restore_links(grouped_raw[key], id2link)
 
     cleanup_cache(run_id)
     return result
