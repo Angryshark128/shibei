@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, FileText, FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ui/confirm";
@@ -20,6 +20,39 @@ import type { ReportMeta, Summary, TaskItem } from "@/types";
 const FULL_REPORT_NAME = "analysis";
 type Mode = "daily" | "full";
 type RunMode = "today" | "full";
+
+interface TocItem {
+  id: string;
+  title: string;
+}
+
+interface TocSection {
+  id: string;
+  title: string;
+  items: TocItem[];
+}
+
+/** 从报告 Markdown 提取 H2/H3 目录（序号锚点与 MarkdownView 注入的 sec-N 一致） */
+function parseToc(content: string): TocSection[] {
+  const sections: TocSection[] = [];
+  let seq = 0;
+  for (const raw of content.split("\n")) {
+    const m = /^(#{2,3})\s+(.+)$/.exec(raw.trim());
+    if (!m) continue;
+    seq += 1;
+    const title = m[2].replace(/[*_`~#>]/g, "").trim();
+    if (m[1].length === 2) {
+      sections.push({ id: `sec-${seq}`, title, items: [] });
+    } else if (sections.length > 0) {
+      sections[sections.length - 1].items.push({ id: `sec-${seq}`, title });
+    }
+  }
+  return sections;
+}
+
+function scrollToSection(id: string): void {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 
 interface ReportCache {
   content: string | null;
@@ -212,6 +245,13 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
   const runDisabled = anyRunning;
   const curIdx = selectedDate ? dates.indexOf(selectedDate) : -1;
 
+  // 报告目录树（章节目录导航；H2 为父节点、H3 为子项）
+  const toc = useMemo(() => (current.content ? parseToc(current.content) : []), [current.content]);
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
+  const toggleSection = useCallback((i: number) => {
+    setCollapsed((c) => ({ ...c, [i]: !c[i] }));
+  }, []);
+
   // ---------- 渲染 ----------
 
   return (
@@ -356,11 +396,11 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
             </div>
             <div className="flex items-center gap-3">
               {(current.updated_at != null || currentMeta?.updated_at != null) && (
-                <span className="text-xs text-ink-400 dark:text-surface-4">
+                <Badge variant="neutral" title={formatTime((current.updated_at ?? currentMeta?.updated_at) ?? 0, tz)}>
                   {t("reports.updatedAt", {
                     time: formatTime((current.updated_at ?? currentMeta?.updated_at) ?? 0, tz),
                   })}
-                </span>
+                </Badge>
               )}
               <Button
                 variant="ghost"
@@ -437,7 +477,56 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                 onRetry={() => activeName && void loadReport(activeName)}
               />
             ) : current.content ? (
-              <MarkdownView content={current.content} />
+              <div className="lg:grid lg:grid-cols-[minmax(0,230px)_minmax(0,1fr)] lg:gap-8">
+                {toc.length > 0 && (
+                  <aside className="mb-4 hidden lg:block" aria-label={t("reports.tocTitle")}>
+                    <nav className="scrollbar-thin sticky top-6 max-h-[calc(100vh-3rem)] overflow-y-auto rounded-xl bg-surface-1 p-2 text-sm dark:bg-ink-900">
+                      <p className="px-2 pb-1 pt-1 text-xs font-medium text-ink-400 dark:text-surface-4">
+                        {t("reports.tocTitle")}
+                      </p>
+                      {toc.map((s, i) => (
+                        <div key={s.id} className="mb-0.5">
+                          <div className="flex items-center rounded-md hover:bg-surface-2 dark:hover:bg-ink-700">
+                            <button
+                              type="button"
+                              aria-expanded={!collapsed[i]}
+                              className="shrink-0 rounded p-1 text-ink-400 hover:text-ink-700 dark:text-surface-4 dark:hover:text-surface-0"
+                              onClick={() => toggleSection(i)}
+                            >
+                              <ChevronDown
+                                className={cn("h-3.5 w-3.5 transition-transform duration-150", collapsed[i] && "-rotate-90")}
+                                aria-hidden="true"
+                              />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => scrollToSection(s.id)}
+                              className="min-w-0 flex-1 truncate rounded-md py-1 pr-2 text-left font-medium text-ink-700 hover:text-brand-600 dark:text-surface-4 dark:hover:text-brand-300"
+                            >
+                              {s.title}
+                            </button>
+                          </div>
+                          {!collapsed[i] &&
+                            s.items.map((it) => (
+                              <button
+                                key={it.id}
+                                type="button"
+                                onClick={() => scrollToSection(it.id)}
+                                className="ml-6 flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-left text-ink-500 hover:bg-surface-2 hover:text-brand-600 dark:text-surface-4 dark:hover:bg-ink-700 dark:hover:text-brand-300"
+                              >
+                                <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
+                                <span className="truncate">{it.title}</span>
+                              </button>
+                            ))}
+                        </div>
+                      ))}
+                    </nav>
+                  </aside>
+                )}
+                <div className="min-w-0">
+                  <MarkdownView content={current.content} />
+                </div>
+              </div>
             ) : (
               <EmptyState
                 icon={FileX}

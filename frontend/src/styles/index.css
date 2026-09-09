@@ -123,6 +123,11 @@
 .md-report h2 {
   @apply mt-8 mb-3 text-base font-semibold text-brand-700 dark:text-brand-300;
 }
+/* 目录树锚点跳转预留头部间距 */
+.md-report h2[id],
+.md-report h3[id] {
+  scroll-margin-top: 24px;
+}
 .md-report p {
   @apply mb-3;
 }

@@ -57,6 +57,7 @@ const enUS = {
     emptyFull: "No full report yet. Click “Full analysis” to generate the first one.",
     emptyToday: "No daily report yet. Run an incremental analysis — one report is generated per day.",
     updatedAt: "Updated {{time}}",
+    tocTitle: "On this page",
     postsCovered: "Based on {{count}} posts",
     refreshReport: "Refresh report",
     loadFailedTitle: "Failed to load report",

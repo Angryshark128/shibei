@@ -57,6 +57,7 @@ const zhCN = {
     emptyFull: "还没有全量报告。点击「全量分析」生成第一份报告。",
     emptyToday: "还没有每日报告。运行一次增量分析后自动生成，每天一份。",
     updatedAt: "更新于 {{time}}",
+    tocTitle: "目录",
     postsCovered: "基于 {{count}} 个帖子",
     refreshReport: "刷新报告",
     loadFailedTitle: "报告加载失败",
