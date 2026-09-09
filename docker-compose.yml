@@ -1,14 +1,30 @@
+# 拾贝 · Docker Compose（子路径前缀参数化）
+# 子路径前缀由 SHIBEI_BASE_PATH 控制（默认 /shibei/；如部署为 https://host/apps/shibei/ 则设 /apps/shibei/）。
+# 镜像 tag 由 SHIBEI_TAG 控制（默认 local；多前缀并存时用不同 tag 隔离，如 apps）。
+# pip 源由 PIP_INDEX_URL 控制（默认官方 PyPI；国内主机可设腾讯云/清华镜像）。
+
 services:
   web:
-    build: .
-    image: shibei:local
+    build:
+      context: .
+      args:
+        VITE_BASE: ${SHIBEI_BASE_PATH:-/shibei/}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+    image: shibei:${SHIBEI_TAG:-local}
     container_name: shibei-web
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256MiB
+        reservations:
+          memory: 16MiB
     environment:
       # 初始管理员凭据：仅在首次启动（无 data/web_secrets.json）时生效
       SHIBEI_USERNAME: ${SHIBEI_USERNAME:-admin}
       SHIBEI_PASSWORD: ${SHIBEI_PASSWORD:?请在 .env 中设置 SHIBEI_PASSWORD}
-      SHIBEI_BASE_PATH: /shibei/
+      # 浏览器侧前缀（决定 cookie path），必须与 nginx 前缀一致
+      SHIBEI_BASE_PATH: ${SHIBEI_BASE_PATH:-/shibei/}
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
       # 抓取数据 / 报告 / 运行时配置 / 凭据全部持久化在宿主 ./data
@@ -23,13 +39,21 @@ services:
     build:
       context: .
       dockerfile: docker/nginx.Dockerfile
-    image: shibei-nginx:local
+      args:
+        NGINX_PREFIX: ${SHIBEI_BASE_PATH:-/shibei/}
+    image: shibei-nginx:${SHIBEI_TAG:-local}
     container_name: shibei-nginx
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256MiB
+        reservations:
+          memory: 16MiB
     depends_on:
       - web
     ports:
       - "${SHIBEI_HTTP_PORT:-8080}:80"
 
 # 使用：cp .env.example .env（填写 SHIBEI_PASSWORD）后 docker compose up -d --build
-# 访问：http://<host>:8080/shibei/
+# 访问：http://<host>:8080/shibei/（改 SHIBEI_BASE_PATH 可换任意子路径）
