@@ -67,7 +67,6 @@ export interface Summary {
 
 export interface ReportsResponse {
   reports: ReportMeta[];
-  summary: Summary;
 }
 
 export interface MeResponse {

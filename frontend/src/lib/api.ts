@@ -5,6 +5,7 @@ import type {
   ReportsResponse,
   RunResponse,
   ScheduleConfig,
+  Summary,
   TaskDetailResponse,
   TaskItem,
   TaskListResponse,
@@ -150,6 +151,9 @@ export const api = {
 
   report: (name: string) =>
     request<ReportData>(`/reports/${encodeURIComponent(name)}`),
+
+  /** 管理仪表数据（需登录） */
+  summary: () => request<{ summary: Summary }>("/summary"),
 };
 
 export type { TaskItem };

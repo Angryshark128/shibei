@@ -660,13 +660,12 @@ def create_app() -> Flask:
 
     # ---------- 报告 ----------
 
+    # 报告只读接口公开（供公开报告页 /reports/* 免登录浏览；管理数据走 /api/summary）
     @app.get("/api/reports")
-    @require_login
     def reports() -> Any:
-        return jsonify({"reports": _report_list(), "summary": _summary(config, secrets_store)})
+        return jsonify({"reports": _report_list()})
 
     @app.get("/api/reports/<name>")
-    @require_login
     def report_detail(name: str) -> Any:
         # 仅允许已知命名（analysis 或 YYYY-MM-DD 每日归档），拒绝路径穿越
         stem = Path(name).name

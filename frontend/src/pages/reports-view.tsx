@@ -1,25 +1,32 @@
-import { ChevronDown, ChevronLeft, ChevronRight, FileText, FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  FileX,
+  Loader2,
+  RefreshCw,
+  Settings2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ConfirmDialog } from "@/components/ui/confirm";
+import { useNavigate, useParams } from "react-router-dom";
 import { EmptyState } from "@/components/ui/empty";
 import { ErrorBlock } from "@/components/ui/error";
-import { StatCard } from "@/components/ui/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody } from "@/components/ui/card";
 import { MarkdownView } from "@/components/ui/markdown";
-import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/layout/page-header";
-import { usePolling, useTimezone } from "@/hooks/usePrefs";
+import { FloatingControls } from "@/components/layout/floating-controls";
+import { useTimezone } from "@/hooks/usePrefs";
 import { ApiError, api } from "@/lib/api";
 import { formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
-import type { ReportMeta, Summary, TaskItem } from "@/types";
+import type { ReportMeta } from "@/types";
 
-const FULL_REPORT_NAME = "analysis";
+export const FULL_REPORT_NAME = "analysis";
 type Mode = "daily" | "full";
-type RunMode = "today" | "full";
 
 interface TocItem {
   id: string;
@@ -54,200 +61,81 @@ function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-interface ReportCache {
-  content: string | null;
-  updated_at: number | null;
-  loading: boolean;
-  error: boolean;
-}
-
-const EMPTY_CACHE: ReportCache = { content: null, updated_at: null, loading: false, error: false };
-
-export interface ReportsViewProps {
-  onGoTasks: () => void;
-}
-
-/** 报告页：概览统计 + 手动触发 + 报告浏览（每日报告按日导航，默认最新一天；另含全量总览） */
-export function ReportsView({ onGoTasks }: ReportsViewProps) {
+/** 公开报告页（/reports/:name，name = YYYY-MM-DD 每日归档或 analysis 全量总览）。免登录只读。 */
+export function ReportsView() {
   const { t } = useTranslation();
-  const toast = useToast();
   const tz = useTimezone();
+  const navigate = useNavigate();
+  const { name } = useParams();
+  const paramName = name ?? "";
 
-  const [summary, setSummary] = useState<Summary | null>(null);
-  const [metaList, setMetaList] = useState<ReportMeta[]>([]);
-  const [mode, setMode] = useState<Mode>("daily");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [cache, setCache] = useState<Record<string, ReportCache>>({});
-  const [running, setRunning] = useState<TaskItem | null>(null);
-  const [triggerMode, setTriggerMode] = useState<RunMode | null>(null);
-  const [stopOpen, setStopOpen] = useState(false);
-  const [stopping, setStopping] = useState(false);
-  const runningIdRef = useRef<string | null>(null);
-  const triggerModeRef = useRef<RunMode | null>(null);
-  const selectedDateRef = useRef<string | null>(null);
-  const modeRef = useRef<Mode>("daily");
-  const bootRef = useRef(false);
+  const [metaList, setMetaList] = useState<ReportMeta[] | null>(null);
+  const [metaError, setMetaError] = useState(false);
+  const [content, setContent] = useState<{ text: string; updated_at: number | null } | null>(null);
+  const [contentLoading, setContentLoading] = useState(true);
+  const [contentError, setContentError] = useState(false);
+  const [notFound, setNotFound] = useState(false);
+  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
 
-  /** 每日归档日期列表（后端已按日期倒序，最新在前） */
+  /** 每日归档日期列表（后端按日期倒序，最新在前） */
   const dates = useMemo(
-    () => metaList.filter((r) => r.kind === "daily").map((r) => r.name),
+    () => (metaList ?? []).filter((r) => r.kind === "daily").map((r) => r.name),
     [metaList],
   );
+  const mode: Mode = paramName === FULL_REPORT_NAME ? "full" : "daily";
+  const currentMeta = metaList?.find((r) => r.name === paramName);
 
   // ---------- 数据加载 ----------
 
-  const loadReport = useCallback(async (name: string) => {
-    setCache((c) => ({ ...c, [name]: { ...(c[name] ?? EMPTY_CACHE), loading: true, error: false } }));
+  const loadList = useCallback(async () => {
     try {
-      const data = await api.report(name);
-      setCache((c) => ({
-        ...c,
-        [name]: { content: data.content, updated_at: data.updated_at, loading: false, error: false },
-      }));
+      const data = await api.reports();
+      setMetaList(data.reports);
+      setMetaError(false);
+    } catch {
+      setMetaList((m) => {
+        if (m === null) setMetaError(true);
+        return m;
+      });
+    }
+  }, []);
+
+  const loadContent = useCallback(async (n: string) => {
+    setContentLoading(true);
+    setContentError(false);
+    setNotFound(false);
+    try {
+      const d = await api.report(n);
+      setContent({ text: d.content, updated_at: d.updated_at });
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) {
-        setCache((c) => ({ ...c, [name]: { ...EMPTY_CACHE } }));
-        return;
-      }
-      setCache((c) => ({ ...c, [name]: { ...(c[name] ?? EMPTY_CACHE), loading: false, error: true } }));
+      if (e instanceof ApiError && e.status === 404) setNotFound(true);
+      else setContentError(true);
+    } finally {
+      setContentLoading(false);
     }
   }, []);
 
-  /** 拉一次报告列表 + 概览，返回原始数据供调用方决定默认选中 */
-  const loadData = useCallback(async () => {
-    const data = await api.reports();
-    setMetaList(data.reports);
-    setSummary(data.summary);
-    return data;
-  }, []);
-
-  const selectDate = useCallback(
-    (date: string) => {
-      setSelectedDate(date);
-      selectedDateRef.current = date;
-      void loadReport(date);
-    },
-    [loadReport],
-  );
-
-  /** 切换 每日 / 全量 视图：目标报告未加载则拉取 */
-  const switchMode = useCallback(
-    (m: Mode) => {
-      setMode(m);
-      modeRef.current = m;
-      if (m === "daily") {
-        if (selectedDateRef.current) {
-          void loadReport(selectedDateRef.current);
-        } else if (dates.length > 0) {
-          selectDate(dates[0]);
-        }
-      } else {
-        void loadReport(FULL_REPORT_NAME);
-      }
-    },
-    [dates, loadReport, selectDate],
-  );
-
-  // 首次进入：拉列表，默认选中最新一份每日报告（无则停留在每日空态）
+  // 挂载拉一次报告列表
   useEffect(() => {
-    if (bootRef.current) return;
-    bootRef.current = true;
-    void loadData().then((data) => {
-      const dailies = data.reports.filter((r) => r.kind === "daily").map((r) => r.name);
-      if (dailies.length > 0) selectDate(dailies[0]);
-    });
-  }, [loadData, selectDate]);
+    void loadList();
+  }, [loadList]);
 
-  // 任务结束后：刷新列表/概览；每日视图下若有更新的归档（如定时任务刚跑完）自动跳到最新
-  const refreshAfterTask = useCallback(async () => {
-    const data = await loadData();
-    const dailies = data.reports.filter((r) => r.kind === "daily").map((r) => r.name);
-    if (modeRef.current === "daily") {
-      const latest = dailies[0];
-      if (latest && latest !== selectedDateRef.current) {
-        selectDate(latest);
-        return;
-      }
-      if (selectedDateRef.current) await loadReport(selectedDateRef.current);
-    } else {
-      await loadReport(FULL_REPORT_NAME);
-    }
-  }, [loadData, loadReport, selectDate]);
+  // 路由参数变化时加载对应报告内容
+  useEffect(() => {
+    if (paramName) void loadContent(paramName);
+  }, [paramName, loadContent]);
 
-  // ---------- 触发运行 ----------
+  const goLatest = useCallback(() => {
+    if (dates.length > 0) navigate(`/reports/${dates[0]}`);
+    else navigate("/reports");
+  }, [dates, navigate]);
 
-  const startRun = useCallback(
-    async (m: RunMode) => {
-      try {
-        const data = await api.run(m);
-        runningIdRef.current = data.task.id;
-        setRunning(data.task);
-        setTriggerMode(m);
-        triggerModeRef.current = m;
-        toast.push("info", m === "full" ? t("reports.startSuccessFull") : t("reports.startSuccessToday"));
-      } catch (e) {
-        if (e instanceof ApiError) {
-          if (e.code === "no_api_key") {
-            toast.push("warn", t("reports.noApiKeyError"));
-          } else if (e.code === "task_running") {
-            toast.push("warn", t("reports.taskRunningError"));
-          } else {
-            toast.push("error", t("reports.startFail"), e.message || undefined);
-          }
-        } else {
-          toast.push("error", t("errors.network"));
-        }
-      }
-    },
-    [t, toast],
-  );
+  const current = content;
+  const toc = useMemo(() => (current ? parseToc(current.text) : []), [current]);
+  const updatedAt = current?.updated_at ?? currentMeta?.updated_at ?? null;
+  const curIdx = dates.indexOf(paramName);
+  const known = metaList == null || paramName === FULL_REPORT_NAME || dates.includes(paramName);
 
-  // 运行中轮询：任务结束后刷新概览与报告
-  usePolling(
-    async () => {
-      if (!runningIdRef.current) return true;
-      const { tasks } = await api.tasks();
-      const current = tasks.find((x) => x.id === runningIdRef.current);
-      if (!current) {
-        runningIdRef.current = null;
-        setRunning(null);
-        setTriggerMode(null);
-        return true;
-      }
-      if (current.status === "running") {
-        setRunning(current);
-        return false;
-      }
-      // 任务结束
-      runningIdRef.current = null;
-      setRunning(null);
-      const mode = triggerModeRef.current;
-      setTriggerMode(null);
-      triggerModeRef.current = null;
-      if (current.status === "succeeded") {
-        toast.push("success", mode === "full" ? t("reports.startSuccessFull") : t("reports.startSuccessToday"));
-      } else if (current.status === "interrupted") {
-        toast.push("info", t("reports.taskStopped"));
-      } else {
-        toast.push("error", t("tasks.statusFailed"));
-      }
-      await refreshAfterTask();
-      return true;
-    },
-    3000,
-    !!running,
-  );
-
-  const activeName = mode === "full" ? FULL_REPORT_NAME : selectedDate;
-  const current = (activeName && cache[activeName]) || EMPTY_CACHE;
-  const currentMeta = activeName ? metaList.find((r) => r.name === activeName) : undefined;
-  const anyRunning = running != null;
-  const runDisabled = anyRunning;
-  const curIdx = selectedDate ? dates.indexOf(selectedDate) : -1;
-
-  // 报告目录树（章节目录导航；H2 为父节点、H3 为子项）
-  const toc = useMemo(() => (current.content ? parseToc(current.content) : []), [current.content]);
-  const [collapsed, setCollapsed] = useState<Record<number, boolean>>({});
   const toggleSection = useCallback((i: number) => {
     setCollapsed((c) => ({ ...c, [i]: !c[i] }));
   }, []);
@@ -260,109 +148,16 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
         title={t("reports.title")}
         desc={t("reports.desc")}
         actions={
-          <>
-            <Button
-              variant="secondary"
-              icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
-              loading={runDisabled && triggerMode === "today"}
-              disabled={runDisabled}
-              onClick={() => void startRun("today")}
-            >
-              {runDisabled && triggerMode === "today" ? "" : t("reports.btnRunToday")}
-            </Button>
-            <Button
-              variant="primary"
-              icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
-              loading={runDisabled && triggerMode === "full"}
-              disabled={runDisabled}
-              onClick={() => void startRun("full")}
-            >
-              {runDisabled && triggerMode === "full" ? "" : t("reports.btnRunFull")}
-            </Button>
-          </>
+          <Button
+            variant="secondary"
+            icon={<Settings2 className="h-4 w-4" aria-hidden="true" />}
+            onClick={() => navigate("/admin")}
+          >
+            {t("nav.manage")}
+          </Button>
         }
       />
 
-      {/* 运行中提示条 */}
-      {running && (
-        <div
-          role="status"
-          className="flex flex-wrap items-center gap-3 rounded-xl border border-brand-100 bg-brand-50 px-4 py-3 dark:border-brand-900 dark:bg-brand-900"
-        >
-          <Loader2 className="h-5 w-5 animate-spin text-brand-600 dark:text-brand-300" aria-hidden="true" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-brand-700 dark:text-brand-300">
-              {t("reports.runningBannerTitle")}
-              <Badge variant="brand" className="ml-2">
-                {running.mode === "full" ? t("tasks.modeFull") : t("tasks.modeToday")}
-              </Badge>
-            </p>
-            <p className="mt-0.5 text-xs text-brand-700/80 dark:text-brand-300/80">{t("reports.runningBannerDesc")}</p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="secondary"
-              icon={<Square className="h-4 w-4" aria-hidden="true" />}
-              loading={stopping}
-              className="border-rose-200 text-rose-600 hover:bg-rose-50 dark:border-rose-900 dark:hover:bg-rose-900 dark:text-rose-400"
-              onClick={() => setStopOpen(true)}
-            >
-              {t("tasks.stopLabel")}
-            </Button>
-            <Button variant="ghost" onClick={onGoTasks} className="text-sm">
-              {t("reports.viewLog")}
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* 概览统计 */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label={t("reports.statPosts")}
-          value={summary ? summary.total_posts : "…"}
-          hint={
-            summary && Object.keys(summary.per_source).length > 0
-              ? Object.keys(summary.per_source).join(" · ")
-              : t("reports.statPostsNone")
-          }
-        />
-        <StatCard label={t("reports.statSources")} value={summary ? Object.keys(summary.per_source).length : "…"} />
-        <StatCard
-          label={t("reports.statLlm")}
-          value={
-            summary ? (
-              summary.llm_configured ? (
-                <Badge variant="success" dot>
-                  {t("reports.statLlmReady")}
-                </Badge>
-              ) : (
-                <Badge variant="warn" dot>
-                  {t("reports.statLlmMissing")}
-                </Badge>
-              )
-            ) : (
-              "…"
-            )
-          }
-        />
-        <StatCard
-          label={t("reports.statToday")}
-          value={
-            summary?.has_today_report ? (
-              <Badge variant="success" dot>
-                {summary.latest_daily ?? t("reports.statLlmReady")}
-              </Badge>
-            ) : (
-              <Badge variant="neutral" dot>
-                {t("reports.statPostsNone")}
-              </Badge>
-            )
-          }
-        />
-      </div>
-
-      {/* 报告卡 */}
       <Card>
         <CardBody className="pt-6">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-surface-3 pb-4 dark:border-ink-900">
@@ -388,27 +183,29 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                       ? "bg-surface-0 text-ink-900 shadow-sm dark:bg-ink-700 dark:text-surface-0"
                       : "text-ink-500 hover:text-ink-900 dark:text-surface-4 dark:hover:text-surface-0",
                   )}
-                  onClick={() => switchMode(x.id)}
+                  onClick={() => {
+                    if (x.id === "full") navigate(`/reports/${FULL_REPORT_NAME}`);
+                    else if (dates.length > 0) navigate(`/reports/${dates[0]}`);
+                    else navigate("/reports");
+                  }}
                 >
                   {x.label}
                 </button>
               ))}
             </div>
             <div className="flex items-center gap-3">
-              {(current.updated_at != null || currentMeta?.updated_at != null) && (
-                <Badge variant="neutral" title={formatTime((current.updated_at ?? currentMeta?.updated_at) ?? 0, tz)}>
-                  {t("reports.updatedAt", {
-                    time: formatTime((current.updated_at ?? currentMeta?.updated_at) ?? 0, tz),
-                  })}
+              {updatedAt != null && (
+                <Badge variant="neutral" title={formatTime(updatedAt, tz)}>
+                  {t("reports.updatedAt", { time: formatTime(updatedAt, tz) })}
                 </Badge>
               )}
               <Button
                 variant="ghost"
                 icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
-                disabled={current.loading}
+                disabled={contentLoading}
                 onClick={() => {
-                  void loadData();
-                  if (activeName) void loadReport(activeName);
+                  void loadList();
+                  if (paramName) void loadContent(paramName);
                 }}
               >
                 {t("common.refresh")}
@@ -416,7 +213,7 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
             </div>
           </div>
 
-          {/* 每日报告：按日导航（左右逐日 + 日期胶囊，默认最新） */}
+          {/* 每日报告：按日导航（左右逐日 + 日期胶囊） */}
           {mode === "daily" && dates.length > 0 && (
             <div className="flex items-center gap-1 border-b border-surface-3 pb-3 pt-3 dark:border-ink-900">
               <Button
@@ -426,7 +223,7 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                 aria-label={t("reports.datePrev")}
                 title={t("reports.datePrev")}
                 disabled={curIdx <= 0}
-                onClick={() => curIdx > 0 && selectDate(dates[curIdx - 1])}
+                onClick={() => curIdx > 0 && navigate(`/reports/${dates[curIdx - 1]}`)}
               >
                 <ChevronLeft className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -435,15 +232,15 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                   <button
                     key={d}
                     type="button"
-                    aria-pressed={selectedDate === d}
+                    aria-pressed={paramName === d}
                     title={`${d} · ${t("reports.tabDaily")}`}
                     className={cn(
                       "shrink-0 rounded-md px-2.5 py-1 font-mono text-xs transition-all duration-150",
-                      selectedDate === d
+                      paramName === d
                         ? "bg-brand-600 text-white shadow-sm"
                         : "bg-surface-2 text-ink-600 hover:bg-surface-3 dark:bg-ink-900 dark:text-surface-4 dark:hover:bg-ink-700",
                     )}
-                    onClick={() => selectDate(d)}
+                    onClick={() => navigate(`/reports/${d}`)}
                   >
                     {d}
                   </button>
@@ -456,7 +253,7 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                 aria-label={t("reports.dateNext")}
                 title={t("reports.dateNext")}
                 disabled={curIdx < 0 || curIdx >= dates.length - 1}
-                onClick={() => curIdx >= 0 && curIdx < dates.length - 1 && selectDate(dates[curIdx + 1])}
+                onClick={() => curIdx >= 0 && curIdx < dates.length - 1 && navigate(`/reports/${dates[curIdx + 1]}`)}
               >
                 <ChevronRight className="h-4 w-4" aria-hidden="true" />
               </Button>
@@ -464,19 +261,36 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
           )}
 
           <div className="pt-4">
-            {current.loading ? (
+            {metaError ? (
+              <ErrorBlock
+                title={t("reports.loadFailedTitle")}
+                desc={t("reports.loadFailedDesc")}
+                onRetry={() => void loadList()}
+              />
+            ) : contentLoading ? (
               <div className="space-y-3 py-4" aria-busy="true">
                 <div className="h-4 w-1/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
                 <div className="h-4 w-2/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
                 <div className="h-4 w-full animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
               </div>
-            ) : current.error ? (
+            ) : contentError ? (
               <ErrorBlock
                 title={t("reports.loadFailedTitle")}
                 desc={t("reports.loadFailedDesc")}
-                onRetry={() => activeName && void loadReport(activeName)}
+                onRetry={() => paramName && void loadContent(paramName)}
               />
-            ) : current.content ? (
+            ) : notFound || !known ? (
+              <EmptyState
+                icon={FileX}
+                title={mode === "full" ? t("reports.emptyFull") : t("reports.notFound")}
+                desc={mode === "full" ? undefined : dates.length > 0 ? t("reports.emptyWrongDate") : undefined}
+                action={
+                  <Button icon={<ChevronRight className="h-4 w-4" aria-hidden="true" />} onClick={goLatest}>
+                    {t("reports.latest")}
+                  </Button>
+                }
+              />
+            ) : current ? (
               <div className="lg:grid lg:grid-cols-[minmax(0,230px)_minmax(0,1fr)] lg:gap-8">
                 {toc.length > 0 && (
                   <aside className="mb-4 hidden lg:block" aria-label={t("reports.tocTitle")}>
@@ -524,7 +338,7 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                   </aside>
                 )}
                 <div className="min-w-0">
-                  <MarkdownView content={current.content} />
+                  <MarkdownView content={current.text} />
                 </div>
               </div>
             ) : (
@@ -532,13 +346,7 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
                 icon={FileX}
                 title={mode === "full" ? t("reports.emptyFull") : t("reports.emptyToday")}
                 action={
-                  <Button
-                    icon={<Play className="h-4 w-4" aria-hidden="true" />}
-                    disabled={runDisabled}
-                    onClick={() => void startRun(mode === "full" ? "full" : "today")}
-                  >
-                    {mode === "full" ? t("reports.btnRunFull") : t("reports.btnRunToday")}
-                  </Button>
+                  <Button onClick={() => navigate("/admin")}>{t("reports.goAdmin")}</Button>
                 }
               />
             )}
@@ -548,30 +356,50 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
 
       <p className="text-xs text-ink-400 dark:text-surface-4">{t("reports.runHint")}</p>
 
-      <ConfirmDialog
-        open={stopOpen}
-        onOpenChange={setStopOpen}
-        title={t("tasks.stopConfirmTitle")}
-        message={t("tasks.stopConfirmMessage")}
-        confirmLabel={t("tasks.stopLabel")}
-        danger
-        confirmLoading={stopping}
-        onConfirm={() => {
-          if (!running) return;
-          setStopping(true);
-          api
-            .stopTask(running.id)
-            .then(() => {
-              toast.push("success", t("tasks.stopSent"));
-              setStopOpen(false);
-            })
-            .catch(() => {
-              toast.push("error", t("tasks.statusFailed"));
-              setStopOpen(false);
-            })
-            .finally(() => setStopping(false));
-        }}
-      />
+      {/* 公开页也保留主题/语言等外观切换，无退出按钮 */}
+      <FloatingControls showLogout={false} onLoggedOut={() => undefined} />
+    </div>
+  );
+}
+
+/** /reports（无参数）：拉列表后跳到最新一份每日报告 */
+export function ReportsIndex() {
+  const navigate = useNavigate();
+  const { t } = useTranslation();
+  const [pending, setPending] = useState(true);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const data = await api.reports();
+        const latest = data.reports.filter((r) => r.kind === "daily").map((r) => r.name)[0];
+        navigate(latest ? `/reports/${latest}` : "/reports", { replace: true });
+      } catch {
+        setPending(false);
+      }
+    })();
+  }, [navigate]);
+
+  if (!pending) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <ErrorBlock
+          title={t("reports.loadFailedTitle")}
+          desc={t("reports.loadFailedDesc")}
+          onRetry={() => {
+            setPending(true);
+            void api.reports().then((d) => {
+              const latest = d.reports.filter((r) => r.kind === "daily").map((r) => r.name)[0];
+              navigate(latest ? `/reports/${latest}` : "/reports", { replace: true });
+            });
+          }}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center" aria-busy="true">
+      <Loader2 className="h-6 w-6 animate-spin text-brand-600 dark:text-brand-400" aria-hidden="true" />
     </div>
   );
 }

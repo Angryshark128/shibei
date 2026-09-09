@@ -1,45 +1,66 @@
-import { Loader2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Loader2, Shell } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { FloatingControls } from "@/components/layout/floating-controls";
 import { TopBar } from "@/components/layout/topbar";
 import { api } from "@/lib/api";
+import { AdminOverview } from "@/pages/admin-overview";
 import { HelpView } from "@/pages/help-view";
 import { LoginPage } from "@/pages/login-page";
-import { ReportsView } from "@/pages/reports-view";
+import { ReportsIndex, ReportsView } from "@/pages/reports-view";
 import { SettingsView } from "@/pages/settings-view";
 import { TasksView } from "@/pages/tasks-view";
-import type { ViewId } from "@/types";
 
-export default function App() {
-  const [user, setUser] = useState<string | null>(null);
-  const [checking, setChecking] = useState(true);
-  const [view, setView] = useState<ViewId>("reports");
+/** 公开页外壳：品牌顶栏 + 内容容器（无登录要求） */
+function PublicShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex min-h-screen flex-col bg-surface-2 dark:bg-ink-900">
+      <header className="border-b border-surface-3 bg-surface-0 dark:border-ink-700 dark:bg-ink-700">
+        <div className="mx-auto flex h-14 w-full max-w-7xl items-center gap-2.5 px-4 sm:px-6 lg:px-8">
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white dark:bg-brand-500">
+            <Shell className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="text-sm font-semibold text-ink-900 dark:text-surface-0">{t("common.appName")}</span>
+        </div>
+      </header>
+      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">{children}</main>
+    </div>
+  );
+}
 
-  // 启动时校验会话
-  useEffect(() => {
-    void (async () => {
-      try {
-        const me = await api.me();
-        setUser(me.username);
-      } catch {
-        setUser(null);
-      } finally {
-        setChecking(false);
-      }
-    })();
-  }, []);
+/** /admin/*：登录守卫 + 管理壳（总览/运行历史/设置/帮助） */
+function AdminRoute() {
+  const navigate = useNavigate();
+  const [status, setStatus] = useState<"checking" | "anon" | "authed">("checking");
+  const [username, setUsername] = useState("");
 
-  // 任意 API 401（会话过期）→ 回登录页
   const handleUnauthorized = useCallback(() => {
-    setUser(null);
-    setView("reports");
+    setStatus("anon");
+    setUsername("");
   }, []);
+
   useEffect(() => {
+    let mounted = true;
+    void api
+      .me()
+      .then((me) => {
+        if (!mounted) return;
+        setUsername(me.username);
+        setStatus("authed");
+      })
+      .catch(() => {
+        if (mounted) setStatus("anon");
+      });
     window.addEventListener("shibei:unauthorized", handleUnauthorized);
-    return () => window.removeEventListener("shibei:unauthorized", handleUnauthorized);
+    return () => {
+      mounted = false;
+      window.removeEventListener("shibei:unauthorized", handleUnauthorized);
+    };
   }, [handleUnauthorized]);
 
-  if (checking) {
+  if (status === "checking") {
     return (
       <div className="flex min-h-screen items-center justify-center bg-surface-2 dark:bg-ink-900">
         <Loader2 className="h-6 w-6 animate-spin text-brand-600 dark:text-brand-400" aria-hidden="true" />
@@ -47,26 +68,60 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (status === "anon") {
     return (
       <>
-        <LoginPage onLogin={(name) => setUser(name)} />
-        {/* 登录页保留悬浮组（主题/明暗/语言），无退出按钮（规范布局 3.3） */}
-        <FloatingControls showLogout={false} onLoggedOut={() => setUser(null)} />
+        <LoginPage
+          onLogin={(name) => {
+            setUsername(name);
+            setStatus("authed");
+          }}
+        />
+        {/* 登录页保留悬浮组（主题/明暗/语言），无退出按钮 */}
+        <FloatingControls showLogout={false} onLoggedOut={() => undefined} />
       </>
     );
   }
 
   return (
     <div className="flex min-h-screen flex-col">
-      <TopBar view={view} onNavigate={setView} username={user} />
+      <TopBar username={username} />
       <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
-        {view === "reports" && <ReportsView onGoTasks={() => setView("tasks")} />}
-        {view === "tasks" && <TasksView />}
-        {view === "settings" && <SettingsView />}
-        {view === "help" && <HelpView onBack={() => setView("reports")} />}
+        <Routes>
+          <Route index element={<AdminOverview />} />
+          <Route path="tasks" element={<TasksView />} />
+          <Route path="settings" element={<SettingsView />} />
+          <Route path="help" element={<HelpView onBack={() => navigate("/admin")} />} />
+          <Route path="*" element={<Navigate to="/admin" replace />} />
+        </Routes>
       </main>
-      <FloatingControls onLoggedOut={() => setUser(null)} />
+      <FloatingControls onLoggedOut={handleUnauthorized} />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Navigate to="/reports" replace />} />
+      <Route
+        path="/reports"
+        element={
+          <PublicShell>
+            <ReportsIndex />
+          </PublicShell>
+        }
+      />
+      <Route
+        path="/reports/:name"
+        element={
+          <PublicShell>
+            <ReportsView />
+          </PublicShell>
+        }
+      />
+      <Route path="/admin/*" element={<AdminRoute />} />
+      <Route path="*" element={<Navigate to="/reports" replace />} />
+    </Routes>
   );
 }

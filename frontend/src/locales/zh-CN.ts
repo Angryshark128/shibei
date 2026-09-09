@@ -33,6 +33,9 @@ const zhCN = {
     reports: "报告",
     tasks: "运行历史",
     settings: "设置",
+    overview: "总览",
+    viewReports: "查看报告",
+    manage: "管理",
   },
   reports: {
     title: "情报报告",
@@ -69,6 +72,15 @@ const zhCN = {
     noApiKeyError: "尚未配置 LLM API Key，请先到「设置」完成 AI 配置。",
     startFail: "启动分析失败",
     viewLog: "查看任务日志",
+    notFound: "没有这份报告",
+    emptyWrongDate: "这一天还没有报告，可查看最新一份。",
+    latest: "查看最新报告",
+    goAdmin: "前往管理页生成",
+  },
+  admin: {
+    title: "管理总览",
+    desc: "运行分析任务、查看任务日志与系统设置；报告在公开页按日浏览。",
+    reportHint: "报告在公开页浏览（免登录、默认最新一天）：",
   },
   tasks: {
     title: "运行历史",

@@ -33,6 +33,9 @@ const enUS = {
     reports: "Reports",
     tasks: "History",
     settings: "Settings",
+    overview: "Overview",
+    viewReports: "View reports",
+    manage: "Console",
   },
   reports: {
     title: "Reports",
@@ -69,6 +72,15 @@ const enUS = {
     noApiKeyError: "No LLM API key configured. Configure it under Settings first.",
     startFail: "Failed to start analysis",
     viewLog: "View logs",
+    notFound: "No such report",
+    emptyWrongDate: "No report for this day — jump to the latest one.",
+    latest: "Latest report",
+    goAdmin: "Generate from console",
+  },
+  admin: {
+    title: "Console",
+    desc: "Run analyses, review task logs and configure the system; reports live on the public page.",
+    reportHint: "Reports are browsable on the public page (no login, latest day by default):",
   },
   tasks: {
     title: "Run history",
