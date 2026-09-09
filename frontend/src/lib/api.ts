@@ -148,8 +148,8 @@ export const api = {
 
   reports: () => request<ReportsResponse>("/reports"),
 
-  report: (name: "analysis" | "analysis_today") =>
-    request<ReportData>(`/reports/${name}`),
+  report: (name: string) =>
+    request<ReportData>(`/reports/${encodeURIComponent(name)}`),
 };
 
 export type { TaskItem };

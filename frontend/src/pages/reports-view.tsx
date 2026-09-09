@@ -1,5 +1,5 @@
-import { FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, FileX, Loader2, Play, RefreshCw, RotateCcw, Square } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "@/components/ui/confirm";
 import { EmptyState } from "@/components/ui/empty";
@@ -15,9 +15,10 @@ import { usePolling, useTimezone } from "@/hooks/usePrefs";
 import { ApiError, api } from "@/lib/api";
 import { formatTime } from "@/lib/time";
 import { cn } from "@/lib/utils";
-import type { Summary, TaskItem } from "@/types";
+import type { ReportMeta, Summary, TaskItem } from "@/types";
 
-type ReportTab = "analysis" | "analysis_today";
+const FULL_REPORT_NAME = "analysis";
+type Mode = "daily" | "full";
 type RunMode = "today" | "full";
 
 interface ReportCache {
@@ -33,68 +34,124 @@ export interface ReportsViewProps {
   onGoTasks: () => void;
 }
 
-/** 报告页：概览统计 + 手动触发分析 + 报告浏览（布局 4.4 标题+图表 与 标题+详情 混合） */
+/** 报告页：概览统计 + 手动触发 + 报告浏览（每日报告按日导航，默认最新一天；另含全量总览） */
 export function ReportsView({ onGoTasks }: ReportsViewProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const tz = useTimezone();
 
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [tab, setTab] = useState<ReportTab>("analysis");
-  const [cache, setCache] = useState<Record<ReportTab, ReportCache>>({
-    analysis: { ...EMPTY_CACHE },
-    analysis_today: { ...EMPTY_CACHE },
-  });
+  const [metaList, setMetaList] = useState<ReportMeta[]>([]);
+  const [mode, setMode] = useState<Mode>("daily");
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [cache, setCache] = useState<Record<string, ReportCache>>({});
   const [running, setRunning] = useState<TaskItem | null>(null);
   const [triggerMode, setTriggerMode] = useState<RunMode | null>(null);
   const [stopOpen, setStopOpen] = useState(false);
   const [stopping, setStopping] = useState(false);
   const runningIdRef = useRef<string | null>(null);
   const triggerModeRef = useRef<RunMode | null>(null);
+  const selectedDateRef = useRef<string | null>(null);
+  const modeRef = useRef<Mode>("daily");
+  const bootRef = useRef(false);
+
+  /** 每日归档日期列表（后端已按日期倒序，最新在前） */
+  const dates = useMemo(
+    () => metaList.filter((r) => r.kind === "daily").map((r) => r.name),
+    [metaList],
+  );
 
   // ---------- 数据加载 ----------
 
-  const loadSummary = useCallback(async () => {
-    try {
-      const data = await api.reports();
-      setSummary(data.summary);
-    } catch {
-      // 概览失败不影响报告区；下一轮自动/手动刷新会重试
-    }
-  }, []);
-
-  const loadReport = useCallback(async (name: ReportTab) => {
-    setCache((c) => ({ ...c, [name]: { ...c[name], loading: true, error: false } }));
+  const loadReport = useCallback(async (name: string) => {
+    setCache((c) => ({ ...c, [name]: { ...(c[name] ?? EMPTY_CACHE), loading: true, error: false } }));
     try {
       const data = await api.report(name);
-      setCache((c) => ({ ...c, [name]: { content: data.content, updated_at: data.updated_at, loading: false, error: false } }));
+      setCache((c) => ({
+        ...c,
+        [name]: { content: data.content, updated_at: data.updated_at, loading: false, error: false },
+      }));
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
-        setCache((c) => ({ ...c, [name]: { content: null, updated_at: null, loading: false, error: false } }));
+        setCache((c) => ({ ...c, [name]: { ...EMPTY_CACHE } }));
         return;
       }
-      setCache((c) => ({ ...c, [name]: { ...c[name], loading: false, error: true } }));
+      setCache((c) => ({ ...c, [name]: { ...(c[name] ?? EMPTY_CACHE), loading: false, error: true } }));
     }
   }, []);
 
-  const refreshActiveTab = useCallback(
-    async (name: ReportTab) => {
-      await Promise.all([loadSummary(), loadReport(name)]);
+  /** 拉一次报告列表 + 概览，返回原始数据供调用方决定默认选中 */
+  const loadData = useCallback(async () => {
+    const data = await api.reports();
+    setMetaList(data.reports);
+    setSummary(data.summary);
+    return data;
+  }, []);
+
+  const selectDate = useCallback(
+    (date: string) => {
+      setSelectedDate(date);
+      selectedDateRef.current = date;
+      void loadReport(date);
     },
-    [loadSummary, loadReport],
+    [loadReport],
   );
+
+  /** 切换 每日 / 全量 视图：目标报告未加载则拉取 */
+  const switchMode = useCallback(
+    (m: Mode) => {
+      setMode(m);
+      modeRef.current = m;
+      if (m === "daily") {
+        if (selectedDateRef.current) {
+          void loadReport(selectedDateRef.current);
+        } else if (dates.length > 0) {
+          selectDate(dates[0]);
+        }
+      } else {
+        void loadReport(FULL_REPORT_NAME);
+      }
+    },
+    [dates, loadReport, selectDate],
+  );
+
+  // 首次进入：拉列表，默认选中最新一份每日报告（无则停留在每日空态）
+  useEffect(() => {
+    if (bootRef.current) return;
+    bootRef.current = true;
+    void loadData().then((data) => {
+      const dailies = data.reports.filter((r) => r.kind === "daily").map((r) => r.name);
+      if (dailies.length > 0) selectDate(dailies[0]);
+    });
+  }, [loadData, selectDate]);
+
+  // 任务结束后：刷新列表/概览；每日视图下若有更新的归档（如定时任务刚跑完）自动跳到最新
+  const refreshAfterTask = useCallback(async () => {
+    const data = await loadData();
+    const dailies = data.reports.filter((r) => r.kind === "daily").map((r) => r.name);
+    if (modeRef.current === "daily") {
+      const latest = dailies[0];
+      if (latest && latest !== selectedDateRef.current) {
+        selectDate(latest);
+        return;
+      }
+      if (selectedDateRef.current) await loadReport(selectedDateRef.current);
+    } else {
+      await loadReport(FULL_REPORT_NAME);
+    }
+  }, [loadData, loadReport, selectDate]);
 
   // ---------- 触发运行 ----------
 
   const startRun = useCallback(
-    async (mode: RunMode) => {
+    async (m: RunMode) => {
       try {
-        const data = await api.run(mode);
+        const data = await api.run(m);
         runningIdRef.current = data.task.id;
         setRunning(data.task);
-        setTriggerMode(mode);
-        triggerModeRef.current = mode;
-        toast.push("info", mode === "full" ? t("reports.startSuccessFull") : t("reports.startSuccessToday"));
+        setTriggerMode(m);
+        triggerModeRef.current = m;
+        toast.push("info", m === "full" ? t("reports.startSuccessFull") : t("reports.startSuccessToday"));
       } catch (e) {
         if (e instanceof ApiError) {
           if (e.code === "no_api_key") {
@@ -141,22 +198,19 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
       } else {
         toast.push("error", t("tasks.statusFailed"));
       }
-      await refreshActiveTab(tab);
+      await refreshAfterTask();
       return true;
     },
     3000,
     !!running,
   );
 
-  // 首次进入：拉概览 + 全量报告
-  useEffect(() => {
-    void loadSummary();
-    void loadReport("analysis");
-  }, [loadSummary, loadReport]);
-
-  const current = cache[tab];
+  const activeName = mode === "full" ? FULL_REPORT_NAME : selectedDate;
+  const current = (activeName && cache[activeName]) || EMPTY_CACHE;
+  const currentMeta = activeName ? metaList.find((r) => r.name === activeName) : undefined;
   const anyRunning = running != null;
   const runDisabled = anyRunning;
+  const curIdx = selectedDate ? dates.indexOf(selectedDate) : -1;
 
   // ---------- 渲染 ----------
 
@@ -253,11 +307,11 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
           }
         />
         <StatCard
-          label={t("reports.tabToday")}
+          label={t("reports.statToday")}
           value={
             summary?.has_today_report ? (
               <Badge variant="success" dot>
-                {t("tasks.statusSucceeded")}
+                {summary.latest_daily ?? t("reports.statLlmReady")}
               </Badge>
             ) : (
               <Badge variant="neutral" dot>
@@ -279,46 +333,95 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
             >
               {(
                 [
-                  { id: "analysis" as const, label: t("reports.tabFull") },
-                  { id: "analysis_today" as const, label: t("reports.tabToday") },
+                  { id: "daily" as const, label: t("reports.tabDaily") },
+                  { id: "full" as const, label: t("reports.tabFull") },
                 ]
               ).map((x) => (
                 <button
                   key={x.id}
                   type="button"
                   role="tab"
-                  aria-selected={tab === x.id}
+                  aria-selected={mode === x.id}
                   className={cn(
                     "rounded-md px-3 py-1.5 text-sm font-medium transition-all duration-150",
-                    tab === x.id
+                    mode === x.id
                       ? "bg-surface-0 text-ink-900 shadow-sm dark:bg-ink-700 dark:text-surface-0"
                       : "text-ink-500 hover:text-ink-900 dark:text-surface-4 dark:hover:text-surface-0",
                   )}
-                  onClick={() => {
-                    setTab(x.id);
-                    if (!cache[x.id].content && !cache[x.id].loading && !cache[x.id].error) {
-                      void loadReport(x.id);
-                    }
-                  }}
+                  onClick={() => switchMode(x.id)}
                 >
                   {x.label}
                 </button>
               ))}
             </div>
             <div className="flex items-center gap-3">
-              {current.updated_at != null && (
-                <span className="text-xs text-ink-400 dark:text-surface-4">{t("reports.updatedAt", { time: formatTime(current.updated_at, tz) })}</span>
+              {(current.updated_at != null || currentMeta?.updated_at != null) && (
+                <span className="text-xs text-ink-400 dark:text-surface-4">
+                  {t("reports.updatedAt", {
+                    time: formatTime((current.updated_at ?? currentMeta?.updated_at) ?? 0, tz),
+                  })}
+                </span>
               )}
               <Button
                 variant="ghost"
                 icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
                 disabled={current.loading}
-                onClick={() => void refreshActiveTab(tab)}
+                onClick={() => {
+                  void loadData();
+                  if (activeName) void loadReport(activeName);
+                }}
               >
                 {t("common.refresh")}
               </Button>
             </div>
           </div>
+
+          {/* 每日报告：按日导航（左右逐日 + 日期胶囊，默认最新） */}
+          {mode === "daily" && dates.length > 0 && (
+            <div className="flex items-center gap-1 border-b border-surface-3 pb-3 pt-3 dark:border-ink-900">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 px-1.5"
+                aria-label={t("reports.datePrev")}
+                title={t("reports.datePrev")}
+                disabled={curIdx <= 0}
+                onClick={() => curIdx > 0 && selectDate(dates[curIdx - 1])}
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </Button>
+              <div className="scrollbar-thin flex gap-1.5 overflow-x-auto py-0.5">
+                {dates.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={selectedDate === d}
+                    title={`${d} · ${t("reports.tabDaily")}`}
+                    className={cn(
+                      "shrink-0 rounded-md px-2.5 py-1 font-mono text-xs transition-all duration-150",
+                      selectedDate === d
+                        ? "bg-brand-600 text-white shadow-sm"
+                        : "bg-surface-2 text-ink-600 hover:bg-surface-3 dark:bg-ink-900 dark:text-surface-4 dark:hover:bg-ink-700",
+                    )}
+                    onClick={() => selectDate(d)}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="shrink-0 px-1.5"
+                aria-label={t("reports.dateNext")}
+                title={t("reports.dateNext")}
+                disabled={curIdx < 0 || curIdx >= dates.length - 1}
+                onClick={() => curIdx >= 0 && curIdx < dates.length - 1 && selectDate(dates[curIdx + 1])}
+              >
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </div>
+          )}
 
           <div className="pt-4">
             {current.loading ? (
@@ -331,21 +434,21 @@ export function ReportsView({ onGoTasks }: ReportsViewProps) {
               <ErrorBlock
                 title={t("reports.loadFailedTitle")}
                 desc={t("reports.loadFailedDesc")}
-                onRetry={() => void refreshActiveTab(tab)}
+                onRetry={() => activeName && void loadReport(activeName)}
               />
             ) : current.content ? (
               <MarkdownView content={current.content} />
             ) : (
               <EmptyState
                 icon={FileX}
-                title={tab === "analysis" ? t("reports.emptyFull") : t("reports.emptyToday")}
+                title={mode === "full" ? t("reports.emptyFull") : t("reports.emptyToday")}
                 action={
                   <Button
                     icon={<Play className="h-4 w-4" aria-hidden="true" />}
                     disabled={runDisabled}
-                    onClick={() => void startRun(tab === "analysis" ? "full" : "today")}
+                    onClick={() => void startRun(mode === "full" ? "full" : "today")}
                   >
-                    {tab === "analysis" ? t("reports.btnRunFull") : t("reports.btnRunToday")}
+                    {mode === "full" ? t("reports.btnRunFull") : t("reports.btnRunToday")}
                   </Button>
                 }
               />

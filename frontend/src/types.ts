@@ -43,6 +43,7 @@ export interface RunResponse {
 
 export interface ReportMeta {
   name: string;
+  kind: "daily" | "full";
   file: string;
   updated_at: number | null;
   size: number;
@@ -60,6 +61,8 @@ export interface Summary {
   llm_configured: boolean;
   has_full_report: boolean;
   has_today_report: boolean;
+  /** 最新一份每日归档的日期（YYYY-MM-DD），无则 null；用于默认定位 */
+  latest_daily: string | null;
 }
 
 export interface ReportsResponse {

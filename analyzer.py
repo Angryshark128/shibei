@@ -365,7 +365,12 @@ def build_report(merged: dict[str, str], total: int, summary: str) -> str:
 
 
 def write_report(report: str, incremental: bool) -> None:
-    target = REPORT_DIR / ("analysis_today.md" if incremental else "analysis.md")
+    """报告落盘：增量写入当日归档 data/analysis/YYYY-MM-DD.md（每天一份，
+    同日多次运行刷新当天）；全量写入 analysis.md 作为总览基线。"""
+    if incremental:
+        target = REPORT_DIR / f"{time.strftime('%Y-%m-%d')}.md"
+    else:
+        target = REPORT_DIR / "analysis.md"
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8") as f:
         f.write(report + "\n")
@@ -421,11 +426,16 @@ def _load_topics(
 
 
 def _show_no_new(config: dict[str, Any]) -> None:
-    for name in ("analysis_today.md", "analysis.md"):
-        p = REPORT_DIR / name
-        if p.exists():
-            print(f"没有新增帖子，无需分析。最近一次报告：{p.resolve()}")
-            return
+    # 提示最近一份报告：优先最新每日归档（YYYY-MM-DD），其次全量总览
+    dailies = sorted(
+        (p for p in REPORT_DIR.glob("*.md") if re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.stem)),
+        key=lambda p: p.stem,
+    )
+    full = REPORT_DIR / "analysis.md"
+    target = dailies[-1] if dailies else (full if full.exists() else None)
+    if target is not None:
+        print(f"没有新增帖子，无需分析。最近一次报告：{target.resolve()}")
+        return
     if _has_data(config):
         print("没有新增帖子，无需分析。")
     else:

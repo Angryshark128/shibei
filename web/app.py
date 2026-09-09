@@ -63,6 +63,10 @@ SECRETS_FILE = DATA_DIR / "web_secrets.json"
 SECRET_KEY_FILE = DATA_DIR / ".secret_key"
 STATIC_DIR = REPO_ROOT / "static"
 
+# 报告文件命名：每日归档 YYYY-MM-DD.md（增量，每天一份）+ analysis.md（全量总览）
+DAILY_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+FULL_REPORT_NAME = "analysis"
+
 SESSION_TTL_DAYS = 7
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -252,18 +256,34 @@ class WebConfig:
 
 
 def _report_list() -> list[dict[str, Any]]:
-    reports: list[dict[str, Any]] = []
-    for path in sorted(REPORT_DIR.glob("*.md")):
+    """全部可浏览报告：每日归档（YYYY-MM-DD，新在前）+ 全量总览 analysis.md。
+
+    只认以上两类命名；analysis_today.md 等旧命名忽略（部署迁移时已归档）。
+    """
+    dailies: list[dict[str, Any]] = []
+    full: dict[str, Any] | None = None
+    for path in REPORT_DIR.glob("*.md"):
+        stem = path.stem
+        if stem == FULL_REPORT_NAME:
+            kind = "full"
+        elif DAILY_NAME_RE.fullmatch(stem):
+            kind = "daily"
+        else:
+            continue
         stat = path.stat()
-        reports.append(
-            {
-                "name": path.stem,  # analysis / analysis_today
-                "file": path.name,
-                "updated_at": stat.st_mtime,
-                "size": stat.st_size,
-            }
-        )
-    return reports
+        item = {
+            "name": stem,
+            "kind": kind,
+            "file": path.name,
+            "updated_at": stat.st_mtime,
+            "size": stat.st_size,
+        }
+        if kind == "full":
+            full = item
+        else:
+            dailies.append(item)
+    dailies.sort(key=lambda r: r["name"], reverse=True)
+    return dailies + ([full] if full else [])
 
 
 def _summary(config: WebConfig, secrets_store: Secrets) -> dict[str, Any]:
@@ -277,12 +297,14 @@ def _summary(config: WebConfig, secrets_store: Secrets) -> dict[str, Any]:
                 per_source[source_dir.name] = count
             total += count
     reports = {r["name"]: r for r in _report_list()}
+    dailies = [r["name"] for r in _report_list() if r["kind"] == "daily"]
     return {
         "total_posts": total,
         "per_source": per_source,
         "llm_configured": bool(config.llm()["base_url"] and config.llm()["model"] and secrets_store.has_llm_api_key),
-        "has_full_report": "analysis" in reports,
-        "has_today_report": "analysis_today" in reports,
+        "has_full_report": FULL_REPORT_NAME in reports,
+        "has_today_report": time.strftime("%Y-%m-%d") in reports,
+        "latest_daily": dailies[0] if dailies else None,
     }
 
 
@@ -646,9 +668,9 @@ def create_app() -> Flask:
     @app.get("/api/reports/<name>")
     @require_login
     def report_detail(name: str) -> Any:
-        # 仅允许已知报告名，拒绝路径穿越
+        # 仅允许已知命名（analysis 或 YYYY-MM-DD 每日归档），拒绝路径穿越
         stem = Path(name).name
-        if stem not in ("analysis", "analysis_today"):
+        if stem != FULL_REPORT_NAME and not DAILY_NAME_RE.fullmatch(stem):
             return jsonify({"error": "not_found", "message": "报告不存在"}), 404
         path = REPORT_DIR / f"{stem}.md"
         if not path.is_file():
@@ -665,6 +687,16 @@ def create_app() -> Flask:
     @require_login
     def summary() -> Any:
         return jsonify({"summary": _summary(config, secrets_store)})
+
+    # ---------- favicon（favicon.ico / favicon.svg 随前端构建产物拷贝到 static 根） ----------
+
+    @app.get("/favicon.ico")
+    def favicon_ico() -> Any:
+        return send_from_directory(STATIC_DIR, "favicon.ico", mimetype="image/x-icon")
+
+    @app.get("/favicon.svg")
+    def favicon_svg() -> Any:
+        return send_from_directory(STATIC_DIR, "favicon.svg", mimetype="image/svg+xml")
 
     # ---------- 静态页面 ----------
 

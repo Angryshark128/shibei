@@ -28,6 +28,11 @@ def _post(id: int, replies: int = 0) -> Post:
     )
 
 
+def _today_name() -> str:
+    """增量报告按日归档名 YYYY-MM-DD.md（与 analyzer.write_report 一致）。"""
+    return analyzer.time.strftime("%Y-%m-%d") + ".md"
+
+
 @pytest.fixture
 def env(monkeypatch, tmp_path):
     monkeypatch.setattr(analyzer, "DATA_DIR", tmp_path / "data")
@@ -295,17 +300,17 @@ def test_main_writes_report_and_state(env, monkeypatch, capsys):
     monkeypatch.setattr(analyzer, "run_crawl", lambda *a, **kw: 0)  # 自动爬取：测试中不真实联网
     _make_post_file(analyzer.DATA_DIR / "v2ex" / "python", _post(1))
 
-    rc = analyzer.main([])  # 默认：增量 → analysis_today.md
+    rc = analyzer.main([])  # 默认：增量 → 当日归档 YYYY-MM-DD.md
     assert rc == 0
 
-    report = (analyzer.REPORT_DIR / "analysis_today.md").read_text(encoding="utf-8")
+    report = (analyzer.REPORT_DIR / _today_name()).read_text(encoding="utf-8")
     assert "# 拾贝 · 多来源分析" in report
     assert "来源: v2ex(python)" in report
     assert "## 好的创意/产品点子" in report
     assert "[标题1](https://www.v2ex.com/t/1)" in report  # 链接还原生效
 
     # 打印报告的绝对路径
-    abs_path = str((analyzer.REPORT_DIR / "analysis_today.md").resolve())
+    abs_path = str((analyzer.REPORT_DIR / _today_name()).resolve())
     assert abs_path in capsys.readouterr().out
 
     state = json.loads(analyzer.STATE_FILE.read_text(encoding="utf-8"))
@@ -370,7 +375,7 @@ def test_main_empty_data_full_crawl_still_analyzes(env, monkeypatch, capsys):
     monkeypatch.setattr(analyzer, "run_crawl", fake_run_crawl)
     rc = analyzer.main([])
     assert rc == 0
-    report = (analyzer.REPORT_DIR / "analysis_today.md").read_text(encoding="utf-8")
+    report = (analyzer.REPORT_DIR / _today_name()).read_text(encoding="utf-8")
     assert "基于 1 个帖子自动生成" in report
     assert "没有新增帖子" not in capsys.readouterr().out
 
@@ -404,7 +409,7 @@ def test_main_mixed_empty_source_still_analyzes(env, monkeypatch, capsys):
     monkeypatch.setattr(analyzer, "run_crawl", fake_run_crawl)
     rc = analyzer.main([])
     assert rc == 0
-    report = (analyzer.REPORT_DIR / "analysis_today.md").read_text(encoding="utf-8")
+    report = (analyzer.REPORT_DIR / _today_name()).read_text(encoding="utf-8")
     assert "基于 1 个帖子自动生成" in report  # 只有 b 的新帖被分析，a 无新增
     assert "没有新增帖子" not in capsys.readouterr().out
 
