@@ -57,8 +57,12 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
     };
   }, [expanded]);
 
-  /** 鼠标移出整组：目标仍在组内（含气泡）不算离开，避免点配色时自动收起 */
+  /** 鼠标移出整组：目标仍在组内（含气泡）不算离开，避免点配色时自动收起。
+   * 气泡打开期间不收起——relatedTarget 为 null（触屏/窗口失焦/快速移动）时
+   * 旧逻辑会立刻 collapse，气泡"点开即灭"无法点选色块；改为仅点色块、
+   * 再点调色板按钮或点外部/Esc 才关闭。 */
   const handleMouseLeave = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (paletteOpen) return;
     const related = e.relatedTarget as Node | null;
     if (related && groupRef.current && groupRef.current.contains(related)) return;
     collapse();
@@ -127,6 +131,7 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
                   "absolute bottom-0 right-full mr-3 origin-bottom-right transition-all duration-200",
                   paletteOpen ? "scale-100 opacity-100" : "pointer-events-none scale-90 opacity-0",
                 )}
+                onPointerDown={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center gap-2 rounded-xl border border-surface-3 bg-surface-0 p-3 shadow-xl dark:border-ink-900 dark:bg-ink-700">
                   {THEMES.map((th) => (
