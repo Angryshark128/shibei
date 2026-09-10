@@ -23,7 +23,14 @@ export function TopBar({ username }: TopBarProps) {
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white dark:bg-brand-500">
             <Shell className="h-5 w-5" aria-hidden="true" />
           </span>
-          <span className="truncate text-base font-semibold text-ink-900 dark:text-surface-0">{t("common.appName")}</span>
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate text-base font-semibold leading-tight text-ink-900 dark:text-surface-0">
+              {t("common.appName")}
+            </span>
+            <span className="truncate text-xs leading-tight text-ink-400 dark:text-surface-4">
+              {t("common.appTagline")}
+            </span>
+          </span>
         </Link>
         <nav aria-label="主导航" className="flex items-center gap-1">
           {NAV_ITEMS.map((item) => (

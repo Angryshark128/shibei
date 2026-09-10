@@ -1,7 +1,6 @@
-import { Loader2, Shell } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { useTranslation } from "react-i18next";
 import { FloatingControls } from "@/components/layout/floating-controls";
 import { TopBar } from "@/components/layout/topbar";
 import { api } from "@/lib/api";
@@ -12,22 +11,9 @@ import { ReportsIndex, ReportsView } from "@/pages/reports-view";
 import { SettingsView } from "@/pages/settings-view";
 import { TasksView } from "@/pages/tasks-view";
 
-/** 公开页外壳：品牌顶栏 + 内容容器（无登录要求） */
+/** 公开页外壳：页面背景容器（报告页自带侧边栏品牌区与导航） */
 function PublicShell({ children }: { children: ReactNode }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex min-h-screen flex-col bg-surface-2 dark:bg-ink-900">
-      <header className="border-b border-surface-3 bg-surface-0 dark:border-ink-700 dark:bg-ink-700">
-        <div className="mx-auto flex h-14 w-full max-w-7xl items-center gap-2.5 px-4 sm:px-6 lg:px-8">
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-white dark:bg-brand-500">
-            <Shell className="h-4 w-4" aria-hidden="true" />
-          </span>
-          <span className="text-sm font-semibold text-ink-900 dark:text-surface-0">{t("common.appName")}</span>
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">{children}</main>
-    </div>
-  );
+  return <div className="min-h-screen bg-surface-2 dark:bg-ink-900">{children}</div>;
 }
 
 /** /admin/*：登录守卫 + 管理壳（总览/运行历史/设置/帮助） */

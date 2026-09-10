@@ -118,10 +118,13 @@
   @apply text-sm leading-6 text-ink-700 dark:text-surface-4;
 }
 .md-report h1 {
-  @apply mb-4 border-b border-surface-3 pb-2 text-xl font-bold text-ink-900 dark:border-ink-700 dark:text-surface-0;
+  @apply mb-6 border-b border-surface-3 pb-2 text-2xl font-bold text-ink-900 dark:border-ink-700 dark:text-surface-0;
 }
 .md-report h2 {
-  @apply mt-8 mb-3 text-base font-semibold text-brand-700 dark:text-brand-300;
+  @apply mt-10 mb-4 border-b border-surface-3 pb-1.5 text-lg font-semibold text-brand-700 dark:border-ink-700 dark:text-brand-300;
+}
+.md-report h3 {
+  @apply mt-6 mb-2 text-sm font-semibold text-ink-900 dark:text-surface-0;
 }
 /* 目录树锚点跳转预留头部间距 */
 .md-report h2[id],
