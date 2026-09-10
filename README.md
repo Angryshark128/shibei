@@ -1,6 +1,6 @@
 # 拾贝
 
-**面向独立开发者的社区情报工具**：从 V2EX 等社区抓取帖子，调用 LLM 提炼**创意 / 痛点 / 独立开发机会 / 趋势洞察**，输出带可点击原帖链接的 Markdown 报告，帮你低成本发现「值得做的东西」。
+**面向独立开发者的社区情报工具**：从 V2EX 等社区抓取帖子，调用 LLM 提炼**产品创意 / 用户痛点 / 潜在机会**，输出带可点击来源链接的 Markdown 报告，帮你低成本发现「值得做的东西」。
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![CLI](https://img.shields.io/badge/CLI%20deps-0-brightgreen) ![Web](https://img.shields.io/badge/Web-Flask%20%2B%20React-blue)
 
@@ -83,22 +83,18 @@ $ uv run python analyzer.py
 
 基于 20 个帖子自动生成
 
-## 好的创意/产品点子
+## 产品创意
 
-- 把 Python 脚本编译成无依赖的单文件可执行工具 — [怎么搞定纯 Python 代码解码 jpg 图片](https://www.v2ex.com/t/1224588)
-- 在线 Python 编辑器 + 运行终端 — [用 GPT5.6 填了之前的坑：在线的 Python 编辑器和运行终端](https://www.v2ex.com/t/1226355)
+- 把 Python 脚本编译成无依赖的单文件可执行工具 — [来源](https://www.v2ex.com/t/1224588)
+- 在线 Python 编辑器 + 运行终端 — [来源](https://www.v2ex.com/t/1226355)
 
 ## 用户痛点
 
-- 申请 TG API 用 Google Voice 一直失败 — [TG api 我用 google Voice 老申请失败](https://www.v2ex.com/t/1229505)
+- 申请 TG API 用 Google Voice 一直失败 — [来源](https://www.v2ex.com/t/1229505)
 
-## 个人开发者机会
+## 潜在机会
 
-- 开源的 AI 文本拟人化工具集，适合独立开发者推广 — [humanize-text 一个开源的 AI 文本拟人化工具集](https://www.v2ex.com/t/1213910)
-
-## 趋势洞察
-
-- 社区开始关注「AI 生成内容」与「跨境工具出海」方向 — [9.9 元起！跨境卖家疯抢的纯净住宅 IP 辣椒 HTTP](https://www.v2ex.com/t/1212876)
+- 开源的 AI 文本拟人化工具集，适合独立开发者推广 — [来源](https://www.v2ex.com/t/1213910)
 ```
 
 > 说明：以上为示例输出；实际内容由你的 LLM 从抓取的帖子中提炼。
@@ -262,9 +258,17 @@ data/
 
 基于 1234 个帖子自动生成
 
-## 好的创意/产品点子
+## 产品创意
 
-- {创意描述} — [帖子标题](https://www.v2ex.com/t/1229217)
+- {创意描述} — [来源](https://www.v2ex.com/t/1229217)
+
+## 用户痛点
+
+- {痛点描述} — [来源](https://www.v2ex.com/t/1229505)
+
+## 潜在机会
+
+- {机会描述} — [来源](https://www.v2ex.com/t/1229217)
 ```
 
 > 完整报告示例见 [examples/analysis.md](examples/analysis.md)。

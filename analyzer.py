@@ -30,16 +30,19 @@ STATE_FILE = DATA_DIR / "state.json"
 REPORT_DIR = DATA_DIR / "analysis"
 CONFIG_FILE = "config.json"
 
-BATCH_SIZE = 15
-MERGE_SIZE = 3
+# 批次分析：每批帖子一次调用即输出全部类别（避免每类各发一次正文，省 2/3 输入 token）。
+# 批内帖数越大，批次间重复的提示词开销越小；单次输出上限相应放大（MULTI_MAX_TOKENS）。
+BATCH_SIZE = 20
+MERGE_SIZE = 3  # 合并回退路径的层级合并宽度
+MULTI_MAX_TOKENS = 8192  # 一次输出多类时的 max_tokens 下限
 MAX_BACKOFF = 60  # 指数退避上限（秒）
 
-# (key, 标题, 定义) —— 四个分析维度，互不干扰
+# (key, 标题, 定义) —— 三个分析模块，互不干扰。
+# 对应报告页的「产品创意 / 用户痛点 / 潜在机会」三个文档，各自按分类（H3）组织。
 CATEGORIES = [
-    ("ideas", "好的创意/产品点子", "帖子中提到或暗示的有价值的想法、工具需求、产品方向"),
+    ("ideas", "产品创意", "帖子中提到或暗示的、有价值的想法、工具需求和产品方向"),
     ("pain", "用户痛点", "用户反复抱怨、求助、表达不满的问题"),
-    ("indie", "个人开发者机会", "对独立开发者/小团队友好的方向，侧重低门槛、可快速验证"),
-    ("trend", "趋势洞察", "社区关注的技术趋势或话题走向"),
+    ("indie", "潜在机会", "对独立开发者/小团队友好、低门槛、可快速验证的方向与机会"),
 ]
 
 # 来源链接锚点：最终输出时由代码还原为可点击链接（不经过 LLM）
@@ -138,14 +141,17 @@ def _http_error_detail(e: urllib.error.HTTPError) -> str:
     return str(err)
 
 
-def call_api(prompt: str, *, timeout: int = 120, retries: int = 3) -> str:
-    """调用 OpenAI 协议 chat/completions，返回 assistant 文本。失败时 raise（附服务端原因）。"""
+def call_api(prompt: str, *, timeout: int = 120, retries: int = 3, max_tokens: int | None = None) -> str:
+    """调用 OpenAI 协议 chat/completions，返回 assistant 文本。失败时 raise（附服务端原因）。
+
+    max_tokens 缺省用配置值；一次输出多类的调用需要更大的上限时显式传入。
+    """
     body = json.dumps(
         {
             "model": _LLM["model"],
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3,
-            "max_tokens": int(_LLM.get("max_tokens", "4096")),
+            "max_tokens": max_tokens or int(_LLM.get("max_tokens", "4096")),
         }
     ).encode("utf-8")
     req = urllib.request.Request(
@@ -207,12 +213,55 @@ def build_batch_prompt(batch_text: str, idx: int, total: int, title: str, desc: 
 - 只输出这一类，不要输出其他类别
 - 如果没有符合定义的信息，输出「无」
 - 不要限制条数，尽可能多地提炼有价值的信息
-- 每条用 `[#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
+- 每条在描述末尾用 ` — [#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
 - 一律用中文回答；即使原文是英文，也要用中文输出
 
 ---（第 {idx + 1}/{total} 批）
 
 {batch_text}"""
+
+
+def build_multi_prompt(batch_text: str, idx: int, total: int) -> str:
+    """一次调用提炼全部类别：帖子正文只发一次，避免按类重复输入（省 token）。"""
+    sections = "\n".join(f"## {title}\n（定义：{desc}）" for _, title, desc in CATEGORIES)
+    return f"""分析以下社区帖子，按下面每个类别分别提炼信息（同一批帖子只发一次，请一次全部输出）。
+
+{sections}
+
+规则：
+- 按上面的顺序，每个类别前写一行 `## 类别名`（必须与上面完全一致），随后列出该类条目；该类没有符合定义的信息时，下面写「无」
+- 不要输出总标题、不要额外解释、不要输出未列出的类别
+- 描述务必精简：每条一句话、不超过 60 字，去掉客套与重复限定
+- 每条在描述末尾用 ` — [#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
+- 一律用中文回答；即使原文是英文，也要用中文输出
+
+---（第 {idx + 1}/{total} 批）
+
+{batch_text}"""
+
+
+_MULTI_HEAD_RE = re.compile(r"^##\s*(.+?)\s*$", re.M)
+
+
+def parse_multi(raw: str) -> dict[str, str]:
+    """把一次调用的多类输出解析为 {key: 该类文本}；缺失的类别返回空串。"""
+    out: dict[str, str] = {key: "" for key, _, _ in CATEGORIES}
+    if not raw:
+        return out
+    buckets: dict[str, list[str]] = {}
+    current = ""
+    for line in raw.split("\n"):
+        m = _MULTI_HEAD_RE.match(line.strip())
+        if m:
+            current = m.group(1).strip()
+            buckets.setdefault(current, [])
+            continue
+        if current:
+            buckets[current].append(line)
+    for key, title, _ in CATEGORIES:
+        text = "\n".join(buckets.get(title, [])).strip()
+        out[key] = "" if is_empty_result(text) else text
+    return out
 
 
 def build_merge_prompt(results: list[str], incremental: bool) -> str:
@@ -224,7 +273,7 @@ def build_merge_prompt(results: list[str], incremental: bool) -> str:
 - 直接输出条目列表，不加总标题
 - 去除重复条目，保留最有代表性的描述
 - 不要限制条数，尽可能保留所有有价值的信息
-- 每条保留 `[#帖子ID]` 来源标注，不得删除或改写
+- 每条保留描述末尾的 ` — [#帖子ID]` 来源标注，不得删除或改写
 - 按价值从高到低排列
 - 一律用中文回答；即使原文是英文，也要用中文输出
 
@@ -236,7 +285,7 @@ def build_organize_prompt(text: str, category_title: str) -> str:
     return f"""以下是「{category_title}」类的分析条目列表。请只做整理分组，不要增删或改写任何条目。
 
 规则：
-- 不新增、不删除、不改写任何条目的含义；每条保留 `[#帖子ID]` 来源标注
+- 不新增、不删除、不改写任何条目的含义；每条保留末尾的 ` — [#帖子ID]` 来源标注
 - 把主题相近的条目归为一组：每组先用一行 `### 子主题名` 开头（子主题名不超过 10 字），随后列出该组全部条目
 - 组数最多 8 组；条目过于零散、无法合理分组时，原样输出整个列表（不要添加任何 ### 行）
 - 组间按价值从高到低排列
@@ -261,6 +310,50 @@ def organize_topics(text: str, category_title: str) -> str:
     if not grouped or not grouped.strip():
         return text
     return grouped
+
+
+def build_consolidate_prompt(results: list[str], category_title: str, incremental: bool) -> str:
+    """一次完成「合并去重 + 分类分组」，省掉「先全量合并、再全量分组」的第二轮调用。"""
+    note = "（本次为今日新增分析）" if incremental else ""
+    body = "\n\n---\n\n".join(results)
+    return f"""以下是多批次分析得到的「{category_title}」条目{note}。请合并去重并分组整理，一次输出。
+
+规则：
+- 不新增、不改写条目含义；合并重复条目，保留最有代表性的一条
+- 输出结构：每组先写一行 `### 分类名`（不超过 10 字），随后列出该组条目；组数最多 8 组
+- 条目过少或无法合理分组时，直接输出条目列表（不要添加任何 ### 行）
+- 每组与组内条目均按价值从高到低排列
+- 每条保留描述末尾的 ` — [#帖子ID]` 来源标注，不得删除或改写
+- 描述务必精简：每条一句话、不超过 60 字
+- 一律用中文回答；即使原文是英文，也要用中文输出
+
+---待整理内容---
+
+{body}"""
+
+
+def consolidate(results: list[str], category_title: str, incremental: bool) -> str:
+    """合并去重 + 分类分组。
+
+    单批结果交给分组整理（organize_topics）；多批结果一次调用完成两步。
+    调用失败或空返回时回退到「层级合并 + 分组」两步路径，保证不丢内容。
+    """
+    results = [r for r in results if not is_empty_result(r)]
+    if not results:
+        return ""
+    if len(results) == 1:
+        return organize_topics(results[0], category_title)
+    try:
+        merged = call_api(build_consolidate_prompt(results, category_title, incremental), timeout=600)
+        if merged and merged.strip():
+            return merged
+    except Exception:
+        pass
+    try:
+        return organize_topics(merge_results(results, incremental), category_title)
+    except Exception:
+        # 两级都失败：原样拼接各批结果，保证不丢内容
+        return "\n\n".join(results)
 
 
 # ---------- 合并与链接还原 ----------
@@ -293,7 +386,10 @@ def merge_results(results: list[str], incremental: bool) -> str:
 
 
 def restore_links(text: str, id2link: dict[str, tuple[str, str]]) -> str:
-    """把 `[#帖子ID]` 还原为 `[帖子标题](原帖URL)`（代码层，URL 不经过 LLM）。"""
+    """把 `[#帖子ID]` 还原为 `[来源](原帖URL)`（代码层，URL 不经过 LLM）。
+
+    只保留可点击的来源链接，不显示帖子标题。
+    """
 
     def _repl(m: re.Match[str]) -> str:
         pid = m.group(1)
@@ -301,8 +397,8 @@ def restore_links(text: str, id2link: dict[str, tuple[str, str]]) -> str:
         if info is None:
             print(f"[!] 链接还原：未找到帖子 {pid} 的来源映射，保留原文", file=sys.stderr)
             return m.group(0)
-        title, url = info
-        return f"[{title}]({url})"
+        _title, url = info
+        return f"[来源]({url})"
 
     return LINK_RE.sub(_repl, text)
 
@@ -316,49 +412,52 @@ def cleanup_cache(run_id: str) -> None:
 
 
 def analyze(topics: list[Post], incremental: bool = False) -> dict[str, str]:
-    """分析所有帖子，返回 {类别标题: 合并后文本}。"""
+    """分析所有帖子，返回 {类别标题: 分组整理后的文本}。
+
+    token 优化：每批帖子只调用一次（一次输出全部类别，正文不再按类重复发送），
+    每类再各调用一次完成「合并去重 + 分类分组」。
+    """
     run_id = hashlib.md5("".join(p.id for p in topics).encode("utf-8")).hexdigest()[:12]
     id2link = {p.id: (p.title, p.url) for p in topics}
     batches = [topics[i : i + BATCH_SIZE] for i in range(0, len(topics), BATCH_SIZE)]
     total_batches = len(batches)
 
-    def analyze_category(bi: int, batch_text: str, key: str, title: str, desc: str) -> str:
-        """分析单个批次单个类别，带 run_id 缓存。"""
-        cache_file = CACHE_DIR / f"{run_id}_b{bi}_{key}.json"
+    def analyze_batch(bi: int, batch_text: str) -> dict[str, str]:
+        """单批一次调用输出全部类别，带 run_id 缓存；输出未按类别分节时回退为按类逐次调用。"""
+        cache_file = CACHE_DIR / f"{run_id}_b{bi}_multi.json"
         cached = load_json(cache_file)
-        if isinstance(cached, dict) and cached.get("result"):
+        if isinstance(cached, dict) and isinstance(cached.get("result"), dict):
             return cached["result"]
-        result = call_api(build_batch_prompt(batch_text, bi, total_batches, title, desc))
+        parsed = parse_multi(
+            call_api(build_multi_prompt(batch_text, bi, total_batches), max_tokens=MULTI_MAX_TOKENS)
+        )
+        if not any(parsed.values()):
+            parsed = {
+                key: call_api(build_batch_prompt(batch_text, bi, total_batches, title, desc))
+                for key, title, desc in CATEGORIES
+            }
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
         with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump({"key": key, "result": result}, f, ensure_ascii=False)
-        return result
+            json.dump({"result": parsed}, f, ensure_ascii=False)
+        return parsed
 
     per_key: dict[str, list[str]] = {key: [] for key, _, _ in CATEGORIES}
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
-        # 批次 × 类别 并行分析
-        futures = []
-        for bi, batch in enumerate(batches):
-            batch_text = format_batch(batch)
-            for key, title, desc in CATEGORIES:
-                futures.append((ex.submit(analyze_category, bi, batch_text, key, title, desc), key))
-        for fut, key in futures:
-            batch_result = fut.result()
-            if not is_empty_result(batch_result):
-                per_key[key].append(batch_result)
+        # 批次并行：每批一次调用输出全部类别
+        batch_results = [
+            fut.result()
+            for fut in (ex.submit(analyze_batch, bi, format_batch(b)) for bi, b in enumerate(batches))
+        ]
+        for parsed in batch_results:
+            for key, text in parsed.items():
+                if text:
+                    per_key[key].append(text)
 
-        # 各类别独立层级合并（并行）
-        merged_raw = {
-            key: fut.result()
-            for fut, key in ((ex.submit(merge_results, per_key[key], incremental), key) for key, _, _ in CATEGORIES)
-        }
-
-        # 合并后的单分类文本再按子主题分组（H3 小节；失败自动回退原样，见 organize_topics）
+        # 每类一次调用：合并去重 + 分类分组（失败自动回退，见 consolidate）
         grouped_raw = {
             key: fut.result()
             for fut, key in (
-                (ex.submit(organize_topics, merged_raw[key], title), key)
-                for key, title, _ in CATEGORIES
+                (ex.submit(consolidate, per_key[key], title, incremental), key) for key, title, _ in CATEGORIES
             )
         }
 
@@ -390,9 +489,9 @@ def load_topics(data_dir: Path, since: int | None = None) -> list[Post]:
     return posts
 
 
-def build_report(merged: dict[str, str], total: int, summary: str) -> str:
+def build_report(merged: dict[str, str], total: int, summary: str, title: str) -> str:
     lines = [
-        "# 拾贝 · 多来源分析",
+        f"# {title}",
         "",
         f"来源: {summary}",
         "",
@@ -533,7 +632,8 @@ def _main(argv: list[str] | None = None) -> int:
     print(f"共 {len(topics)} 个帖子待分析（来源: {summary}）...")
     merged = analyze(topics, incremental=incremental)
 
-    report = build_report(merged, len(topics), summary)
+    day = time.strftime("%Y-%m-%d")
+    report = build_report(merged, len(topics), summary, day if incremental else f"{day} 全量总览")
     write_report(report, incremental=incremental)
 
     now = int(time.time())

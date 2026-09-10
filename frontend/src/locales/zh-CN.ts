@@ -14,6 +14,7 @@ const zhCN = {
     minutesAgo: "{{n}} 分钟前",
     hoursAgo: "{{n}} 小时前",
     notConfigured: "未配置",
+    loading: "加载中…",
     unknown: "未知",
   },
   login: {
@@ -39,7 +40,7 @@ const zhCN = {
   },
   reports: {
     title: "情报报告",
-    desc: "查看与运行社区分析。报告由 LLM 从抓取的社区帖子中提炼创意、痛点与趋势。",
+    desc: "查看与运行社区分析。报告由 LLM 从抓取的社区帖子中提炼产品创意、用户痛点与潜在机会。",
     statPosts: "已抓取帖子",
     statSources: "数据来源",
     statLlm: "AI 配置",
@@ -55,14 +56,13 @@ const zhCN = {
     tabFull: "全量总览",
     tabDaily: "每日报告",
     statToday: "今日报告",
-    datePrev: "前一天",
-    dateNext: "后一天",
     emptyFull: "还没有全量报告。点击「全量分析」生成第一份报告。",
     emptyToday: "还没有每日报告。运行一次增量分析后自动生成，每天一份。",
     updatedAt: "更新于 {{time}}",
-    tocTitle: "目录",
-    postsCovered: "基于 {{count}} 个帖子",
-    refreshReport: "刷新报告",
+    dateNav: "日期",
+    docNav: "文档",
+    sectionNav: "子分类",
+    backToTop: "回到顶部",
     loadFailedTitle: "报告加载失败",
     loadFailedDesc: "服务暂时不可用，请稍后重试。",
     startSuccessToday: "增量分析已启动",
@@ -75,7 +75,6 @@ const zhCN = {
     notFound: "没有这份报告",
     emptyWrongDate: "这一天还没有报告，可查看最新一份。",
     latest: "查看最新报告",
-    goAdmin: "前往管理页生成",
   },
   admin: {
     title: "管理总览",
@@ -174,7 +173,7 @@ const zhCN = {
   },
   help: {
     title: "使用帮助",
-    intro: "拾贝从社区抓取帖子，调用你配置的 AI 提炼四类洞察：创意点子、用户痛点、独立开发机会与趋势洞察。",
+    intro: "拾贝从社区抓取帖子，调用你配置的 AI 提炼三类洞察：产品创意、用户痛点与潜在机会；报告按日期归档，每个文档再按分类组织。",
     sections: [
       {
         head: "报告",

@@ -61,8 +61,8 @@ def test_format_post_truncates_content_and_replies():
 
 
 def test_build_batch_prompt_contains_marker_rule():
-    prompt = analyzer.build_batch_prompt("批次文本", idx=0, total=2, title="用户痛点", desc="定义")
-    assert "只提炼「用户痛点」类信息" in prompt
+    prompt = analyzer.build_batch_prompt("批次文本", idx=0, total=2, title="痛点机会", desc="定义")
+    assert "只提炼「痛点机会」类信息" in prompt
     assert "[#帖子ID]" in prompt
     assert "（第 1/2 批）" in prompt
     assert "批次文本" in prompt
@@ -106,7 +106,7 @@ def test_restore_links():
     id2link = {"1": ("标题1", "https://v2ex.com/t/1")}
     text = "洞察 [#1] 与 [#2]"
     out = analyzer.restore_links(text, id2link)
-    assert out == "洞察 [标题1](https://v2ex.com/t/1) 与 [#2]"  # 未知 ID 保留原文
+    assert out == "洞察 [来源](https://v2ex.com/t/1) 与 [#2]"  # 未知 ID 保留原文
 
 
 def test_restore_links_unknown_warns(capsys):
@@ -118,46 +118,53 @@ def test_restore_links_unknown_warns(capsys):
 
 
 def test_analyze_end_to_end(env, monkeypatch):
-    # 20 帖 → 2 批 × 4 类 = 8 次分析调用 + 4 次合并调用
+    # 20 帖 → 1 批（BATCH_SIZE=20）：1 次「一次输出多类」调用 + 3 次「合并+分组」调用
     topics = [_post(i) for i in range(20)]
     calls = {"count": 0}
-    monkeypatch.setattr(
-        analyzer,
-        "call_api",
-        lambda prompt, **kw: (calls.__setitem__("count", calls["count"] + 1), "[#1] 洞察")[1],
-    )
+
+    def fake_call(prompt, **kw):
+        calls["count"] += 1
+        if "整理" in prompt:  # 「合并去重并分组整理」或「只做整理分组」
+            return "### 分类A\n- [#1] 洞察"
+        return "## 产品创意\n- [#1] 洞察\n## 用户痛点\n- [#1] 洞察\n## 潜在机会\n- [#1] 洞察"
+
+    monkeypatch.setattr(analyzer, "call_api", fake_call)
 
     merged = analyzer.analyze(topics, incremental=False)
-    assert set(merged) == {"好的创意/产品点子", "用户痛点", "个人开发者机会", "趋势洞察"}
+    assert set(merged) == {"产品创意", "用户痛点", "潜在机会"}
     for text in merged.values():
-        assert "[标题1](https://www.v2ex.com/t/1)" in text  # [#1] 已还原
-    assert calls["count"] == 8 + 4 + 4  # 8 批次 + 4 类合并 + 4 类子主题分组
+        assert "### 分类A" in text  # 分组结构保留
+        assert "[来源](https://www.v2ex.com/t/1)" in text  # [#1] 已还原为来源链接
+    assert calls["count"] == 1 + 3  # 1 批多类 + 3 类合并分组
     # 缓存已清理
     assert not list(analyzer.CACHE_DIR.glob("*.json"))
 
 
 def test_analyze_cache_hit(env, monkeypatch):
-    # 预写该 run_id 的批次缓存 → 批次分析全命中，只跑合并
-    topics = [_post(i) for i in range(20)]  # 2 批 × 4 类 = 8 个缓存文件
+    # 预写该 run_id 的批次缓存（一次调用输出多类）→ 批次全命中，只跑每类合并分组
+    topics = [_post(i) for i in range(20)]  # 1 批 = 1 个缓存文件
     run_id = hashlib.md5("".join(p.id for p in topics).encode("utf-8")).hexdigest()[:12]
     analyzer.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    for bi in (0, 1):
-        for key, _, _ in analyzer.CATEGORIES:
-            (analyzer.CACHE_DIR / f"{run_id}_b{bi}_{key}.json").write_text(
-                json.dumps({"key": key, "result": "[#1] 洞察"}), encoding="utf-8"
-            )
+    (analyzer.CACHE_DIR / f"{run_id}_b0_multi.json").write_text(
+        json.dumps({"result": {key: "[#1] 洞察" for key, _, _ in analyzer.CATEGORIES}}),
+        encoding="utf-8",
+    )
 
     calls = {"count": 0}
     monkeypatch.setattr(
         analyzer,
         "call_api",
-        lambda prompt, **kw: (calls.__setitem__("count", calls["count"] + 1), "[#1] 洞察")[1],
+        lambda prompt, **kw: (
+            calls.__setitem__("count", calls["count"] + 1),
+            "### 分类A\n- [#1] 洞察",
+        )[1],
     )
     analyzer.analyze(topics)
-    assert calls["count"] == 4 + 4  # 4 类合并 + 4 类子主题分组（8 次批次分析全命中缓存）
+    assert calls["count"] == 3  # 仅 3 类合并分组（批次分析全命中缓存）
 
 
-def test_analyze_single_batch_no_merge(env, monkeypatch):
+def test_analyze_falls_back_to_per_category_when_unparsed(env, monkeypatch):
+    # 多类输出未按 `## 类别` 分节（无法解析）→ 回退为按类逐次调用（保底路径）
     topics = [_post(i) for i in range(5)]
     calls = {"count": 0}
     monkeypatch.setattr(
@@ -166,7 +173,46 @@ def test_analyze_single_batch_no_merge(env, monkeypatch):
         lambda prompt, **kw: (calls.__setitem__("count", calls["count"] + 1), "[#1] 洞察")[1],
     )
     analyzer.analyze(topics)
-    assert calls["count"] == 4 + 4  # 1 批 × 4 类（批次）+ 4 类子主题分组；无合并
+    assert calls["count"] == 1 + 3 + 3  # 1 次多类调用（解析失败）+ 回退按类 3 次 + 3 类合并分组
+
+
+def test_build_multi_prompt_lists_all_categories():
+    prompt = analyzer.build_multi_prompt("批次文本", idx=0, total=2)
+    for _, title, _ in analyzer.CATEGORIES:
+        assert f"## {title}" in prompt
+    assert "[#帖子ID]" in prompt
+    assert "（第 1/2 批）" in prompt
+    assert "批次文本" in prompt
+
+
+def test_parse_multi_splits_sections_and_drops_empty():
+    raw = "## 产品创意\n- [#1] 洞察\n## 用户痛点\n无\n## 潜在机会\n\n- [#2] 机会"
+    out = analyzer.parse_multi(raw)
+    assert out["ideas"] == "- [#1] 洞察"
+    assert out["pain"] == ""  # 「无」视为空
+    assert out["indie"] == "- [#2] 机会"
+
+
+def test_parse_multi_ignores_unknown_sections():
+    out = analyzer.parse_multi("## 别的标题\n- x\n正文")
+    assert set(out.values()) == {""}
+
+
+def test_consolidate_single_result_organizes(monkeypatch):
+    # 单批结果交给分组整理（organize_topics）
+    monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "### 分类A\n- [#1] x")
+    out = analyzer.consolidate(["- [#1] x"], "产品创意", incremental=True)
+    assert out.startswith("### 分类A")
+
+
+def test_consolidate_keeps_content_when_all_calls_fail(monkeypatch):
+    # 合并分组与回退路径都失败 → 原样拼接各批结果，不丢内容
+    def boom(prompt, **kw):
+        raise RuntimeError("llm down")
+
+    monkeypatch.setattr(analyzer, "call_api", boom)
+    out = analyzer.consolidate(["- [#1] x", "- [#2] y"], "产品创意", incremental=False)
+    assert "[#1] x" in out and "[#2] y" in out
 
 
 # ---------- load_topics ----------
@@ -304,10 +350,10 @@ def test_main_writes_report_and_state(env, monkeypatch, capsys):
     assert rc == 0
 
     report = (analyzer.REPORT_DIR / _today_name()).read_text(encoding="utf-8")
-    assert "# 拾贝 · 多来源分析" in report
+    assert f"# {_today_name().removesuffix('.md')}" in report
     assert "来源: v2ex(python)" in report
-    assert "## 好的创意/产品点子" in report
-    assert "[标题1](https://www.v2ex.com/t/1)" in report  # 链接还原生效
+    assert "## 产品创意" in report
+    assert "[来源](https://www.v2ex.com/t/1)" in report  # 链接还原生效
 
     # 打印报告的绝对路径
     abs_path = str((analyzer.REPORT_DIR / _today_name()).resolve())
@@ -451,7 +497,7 @@ def test_organize_topics_groups_into_h3(monkeypatch):
         "call_api",
         lambda prompt, **kw: "### 效率工具\n- [#1] 洞察A\n### 生态\n- [#2] 洞察B",
     )
-    out = analyzer.organize_topics("some merged text", "好的创意/产品点子")
+    out = analyzer.organize_topics("some merged text", "产品创意")
     assert "### 效率工具" in out
     assert "### 生态" in out
     assert "[#2] 洞察B" in out
@@ -462,8 +508,8 @@ def test_organize_topics_empty_input_returns_as_is(monkeypatch):
         raise AssertionError("空输入不应触发 LLM 调用")
 
     monkeypatch.setattr(analyzer, "call_api", boom)
-    assert analyzer.organize_topics("", "好的创意/产品点子") == ""
-    assert analyzer.organize_topics("   \n", "好的创意/产品点子") == "   \n"
+    assert analyzer.organize_topics("", "产品创意") == ""
+    assert analyzer.organize_topics("   \n", "产品创意") == "   \n"
 
 
 def test_organize_topics_fallback_on_error(monkeypatch):
@@ -473,17 +519,17 @@ def test_organize_topics_fallback_on_error(monkeypatch):
 
     monkeypatch.setattr(analyzer, "call_api", boom)
     src = "- [#1] 洞察A"
-    assert analyzer.organize_topics(src, "好的创意/产品点子") == src
+    assert analyzer.organize_topics(src, "产品创意") == src
 
 
 def test_organize_topics_fallback_on_empty_reply(monkeypatch):
     monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "  ")
     src = "- [#1] 洞察A"
-    assert analyzer.organize_topics(src, "好的创意/产品点子") == src
+    assert analyzer.organize_topics(src, "产品创意") == src
 
 
 def test_build_organize_prompt_keeps_marker_rule():
-    prompt = analyzer.build_organize_prompt("内容", "用户痛点")
+    prompt = analyzer.build_organize_prompt("内容", "痛点机会")
     assert "只做整理分组" in prompt
     assert "[#帖子ID]" in prompt
     assert "### 子主题名" in prompt

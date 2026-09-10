@@ -14,6 +14,7 @@ const enUS = {
     minutesAgo: "{{n}}m ago",
     hoursAgo: "{{n}}h ago",
     notConfigured: "Not configured",
+    loading: "Loading…",
     unknown: "Unknown",
   },
   login: {
@@ -39,7 +40,7 @@ const enUS = {
   },
   reports: {
     title: "Reports",
-    desc: "View and run community analysis. Reports distill ideas, pain points and trends from scraped posts via your AI.",
+    desc: "View and run community analysis. Reports distill product ideas, user pain points and opportunities from scraped posts via your AI.",
     statPosts: "Posts scraped",
     statSources: "Sources",
     statLlm: "AI config",
@@ -55,14 +56,13 @@ const enUS = {
     tabFull: "Full overview",
     tabDaily: "Daily reports",
     statToday: "Today",
-    datePrev: "Previous day",
-    dateNext: "Next day",
     emptyFull: "No full report yet. Click “Full analysis” to generate the first one.",
     emptyToday: "No daily report yet. Run an incremental analysis — one report is generated per day.",
     updatedAt: "Updated {{time}}",
-    tocTitle: "On this page",
-    postsCovered: "Based on {{count}} posts",
-    refreshReport: "Refresh report",
+    dateNav: "Dates",
+    docNav: "Documents",
+    sectionNav: "Sections",
+    backToTop: "Back to top",
     loadFailedTitle: "Failed to load report",
     loadFailedDesc: "Service temporarily unavailable, please try again later.",
     startSuccessToday: "Incremental analysis started",
@@ -75,7 +75,6 @@ const enUS = {
     notFound: "No such report",
     emptyWrongDate: "No report for this day — jump to the latest one.",
     latest: "Latest report",
-    goAdmin: "Generate from console",
   },
   admin: {
     title: "Console",
@@ -174,7 +173,7 @@ const enUS = {
   },
   help: {
     title: "Help",
-    intro: "Shibei scrapes posts from communities and uses your AI to distill four kinds of insight: ideas, pain points, indie-dev opportunities and trends.",
+    intro: "Shibei scrapes posts from communities and uses your AI to distill three kinds of insight: product ideas, user pain points and opportunities. Reports are archived by date, and each document is organised into sections.",
     sections: [
       {
         head: "Reports",
