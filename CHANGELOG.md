@@ -74,6 +74,13 @@
 
 ## [Unreleased]
 
+### 新增
+
+- **中英双语报告**：报告内容可选中文 / English——语言由 CLI `--lang` / `ANALYZE_LANG` 或 Web 设置页「报告语言」决定（默认中文）。英文报告存 `analysis.en.md` / `YYYY-MM-DD.en.md`（中文沿用原名）；报告页按界面语言自动显示对应版本，暂缺该语言时回退显示并提示。任务日志、CLI 提示随语言输出，分析缓存按语言隔离；每次分析只生成一种语言，LLM 成本不变。
+- **界面标语**改为「独立开发者的社区情报」/「Community Intelligence for Indie Developers」，点明面向独立开发者。
+
+### 计划
+
 - 更多来源：Reddit（OAuth 商用授权）、即刻（逆向）等门槛更高的社区
 - 报告增强：分类标签、历史对比、导出其它格式
 - list_nodes 增强（SSPai / Product Hunt 无节点概念）

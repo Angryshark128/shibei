@@ -1,7 +1,7 @@
 const zhCN = {
   common: {
     appName: "拾贝",
-    appTagline: "社区情报分析",
+    appTagline: "独立开发者的社区情报",
     save: "保存",
     saving: "保存中…",
     cancel: "取消",
@@ -75,6 +75,7 @@ const zhCN = {
     notFound: "没有这份报告",
     emptyWrongDate: "这一天还没有报告，可查看最新一份。",
     latest: "查看最新报告",
+    langFallback: "该报告以另一种语言生成，暂未生成当前语言版本；运行一次新的分析后即可切换。",
   },
   admin: {
     title: "管理总览",
@@ -95,6 +96,8 @@ const zhCN = {
     actionLog: "日志",
     modeToday: "增量",
     modeFull: "全量",
+    langZh: "中",
+    langEn: "EN",
     statusRunning: "运行中",
     statusSucceeded: "成功",
     statusFailed: "失败",
@@ -147,6 +150,11 @@ const zhCN = {
     sourceDisabled: "停用",
     timezoneSection: "显示时区",
     timezoneDesc: "报告时间与任务时间的显示时区。",
+    reportLangSection: "报告语言",
+    reportLangDesc: "新分析生成的报告使用的语言；报告页按界面语言显示对应版本。",
+    reportLangHint: "每次分析只生成一种语言；历史报告保持原语言。",
+    reportLangZh: "中文",
+    reportLangEn: "English",
     saveFailedNetwork: "网络连接失败，请稍后重试",
     scheduleSection: "每日定时",
     scheduleDesc: "每天固定时间自动运行一次增量分析（无新增时自动跳过）。",

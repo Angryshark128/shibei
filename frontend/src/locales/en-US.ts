@@ -1,7 +1,7 @@
 const enUS = {
   common: {
     appName: "Shibei",
-    appTagline: "Community Intelligence",
+    appTagline: "Community Intelligence for Indie Developers",
     save: "Save",
     saving: "Saving…",
     cancel: "Cancel",
@@ -75,6 +75,7 @@ const enUS = {
     notFound: "No such report",
     emptyWrongDate: "No report for this day — jump to the latest one.",
     latest: "Latest report",
+    langFallback: "This report was generated in another language. Run a new analysis to switch it to the current language.",
   },
   admin: {
     title: "Console",
@@ -95,6 +96,8 @@ const enUS = {
     actionLog: "Log",
     modeToday: "Incremental",
     modeFull: "Full",
+    langZh: "ZH",
+    langEn: "EN",
     statusRunning: "Running",
     statusSucceeded: "Succeeded",
     statusFailed: "Failed",
@@ -147,6 +150,11 @@ const enUS = {
     sourceDisabled: "Disabled",
     timezoneSection: "Display timezone",
     timezoneDesc: "Timezone used for report & task timestamps.",
+    reportLangSection: "Report language",
+    reportLangDesc: "Language used by newly generated reports; the Reports page shows the version matching your UI language.",
+    reportLangHint: "Each analysis run generates one language only; existing reports keep their original language.",
+    reportLangZh: "Chinese",
+    reportLangEn: "English",
     saveFailedNetwork: "Network error, please try again later",
     scheduleSection: "Daily schedule",
     scheduleDesc: "Run an incremental analysis at a fixed time every day (skipped when there is nothing new).",

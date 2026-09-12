@@ -2,6 +2,7 @@ import type {
   AppConfig,
   MeResponse,
   ReportData,
+  ReportLangConfig,
   ReportsResponse,
   RunResponse,
   ScheduleConfig,
@@ -149,8 +150,16 @@ export const api = {
 
   reports: () => request<ReportsResponse>("/reports"),
 
-  report: (name: string) =>
-    request<ReportData>(`/reports/${encodeURIComponent(name)}`),
+  report: (name: string, lang: "zh" | "en" = "zh") =>
+    request<ReportData>(`/reports/${encodeURIComponent(name)}?lang=${lang}`),
+
+  reportLang: () => request<ReportLangConfig>("/report-lang"),
+
+  saveReportLang: (lang: "zh" | "en") =>
+    request<ReportLangConfig>("/report-lang", {
+      method: "PUT",
+      body: JSON.stringify({ lang }),
+    }),
 
   /** 管理仪表数据（需登录） */
   summary: () => request<{ summary: Summary }>("/summary"),

@@ -85,3 +85,23 @@ def save_webhook(
         data["token"] = token
     _write_json(WEBHOOK_FILE, data)
     return data
+
+
+# ---------- 报告语言 ----------
+
+
+REPORT_LANGS = ("zh", "en")
+REPORT_LANG_FILE = DATA_DIR / "web_report_lang.json"
+
+
+def load_report_lang() -> str:
+    """Web 报告生成语言（zh/en），供手动/定时任务触发时传给 analyzer。默认 zh。"""
+    data = _read_json(REPORT_LANG_FILE, {})
+    lang = str(data.get("lang", "zh"))
+    return lang if lang in REPORT_LANGS else "zh"
+
+
+def save_report_lang(lang: str) -> None:
+    if lang not in REPORT_LANGS:
+        raise ValueError(f"未知报告语言: {lang}")
+    _write_json(REPORT_LANG_FILE, {"lang": lang})

@@ -63,9 +63,11 @@ SECRETS_FILE = DATA_DIR / "web_secrets.json"
 SECRET_KEY_FILE = DATA_DIR / ".secret_key"
 STATIC_DIR = REPO_ROOT / "static"
 
-# 报告文件命名：每日归档 YYYY-MM-DD.md（增量，每天一份）+ analysis.md（全量总览）
+# 报告文件命名：每日归档 YYYY-MM-DD.md（增量，每天一份）+ analysis.md（全量总览）；
+# 英文报告在基名后加 .en 后缀（analysis.en.md / YYYY-MM-DD.en.md），zh 无后缀向后兼容。
 DAILY_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 FULL_REPORT_NAME = "analysis"
+REPORT_FILE_RE = re.compile(r"^(analysis|\d{4}-\d{2}-\d{2})(?:\.(zh|en))?$")
 
 SESSION_TTL_DAYS = 7
 F = TypeVar("F", bound=Callable[..., Any])
@@ -256,34 +258,31 @@ class WebConfig:
 
 
 def _report_list() -> list[dict[str, Any]]:
-    """全部可浏览报告：每日归档（YYYY-MM-DD，新在前）+ 全量总览 analysis.md。
+    """全部可浏览报告：每日归档（YYYY-MM-DD，新在前）+ 全量总览 analysis[.en]。
 
     只认以上两类命名；analysis_today.md 等旧命名忽略（部署迁移时已归档）。
+    name 为基名（analysis / YYYY-MM-DD），lang 标记文件语言（zh 无后缀 / en 带 .en）。
     """
     dailies: list[dict[str, Any]] = []
-    full: dict[str, Any] | None = None
+    full_items: list[dict[str, Any]] = []
     for path in REPORT_DIR.glob("*.md"):
-        stem = path.stem
-        if stem == FULL_REPORT_NAME:
-            kind = "full"
-        elif DAILY_NAME_RE.fullmatch(stem):
-            kind = "daily"
-        else:
+        m = REPORT_FILE_RE.fullmatch(path.stem)
+        if not m:
             continue
+        base, lang = m.group(1), m.group(2) or "zh"
+        kind = "full" if base == FULL_REPORT_NAME else "daily"
         stat = path.stat()
         item = {
-            "name": stem,
+            "name": base,
             "kind": kind,
+            "lang": lang,
             "file": path.name,
             "updated_at": stat.st_mtime,
             "size": stat.st_size,
         }
-        if kind == "full":
-            full = item
-        else:
-            dailies.append(item)
+        (full_items if kind == "full" else dailies).append(item)
     dailies.sort(key=lambda r: r["name"], reverse=True)
-    return dailies + ([full] if full else [])
+    return dailies + sorted(full_items, key=lambda r: r["lang"])
 
 
 def _summary(config: WebConfig, secrets_store: Secrets) -> dict[str, Any]:
@@ -524,6 +523,7 @@ def create_app() -> Flask:
         if llm["model"]:
             env["ANALYZE_MODEL"] = llm["model"]
         env["ANALYZE_MAX_TOKENS"] = str(llm["max_tokens"])
+        env["ANALYZE_LANG"] = web_settings.load_report_lang()  # 报告/日志语言：设置页「报告语言」
         if secrets_store.llm_api_key:
             env["OPENAI_API_KEY"] = secrets_store.llm_api_key
         return env
@@ -658,6 +658,24 @@ def create_app() -> Flask:
             return jsonify({"error": "send_failed", "message": "发送失败，请检查地址与网络"}), 502
         return jsonify({"ok": True})
 
+    # ---------- 报告语言 ----------
+
+    @app.get("/api/report-lang")
+    @require_login
+    def report_lang_get() -> Any:
+        return jsonify({"lang": web_settings.load_report_lang()})
+
+    @app.put("/api/report-lang")
+    @require_login
+    @require_same_origin
+    def report_lang_put() -> Any:
+        data = body_json()
+        lang = str(data.get("lang", "")).strip()
+        if lang not in web_settings.REPORT_LANGS:
+            return jsonify({"error": "bad_lang", "message": "lang 需为 zh 或 en"}), 400
+        web_settings.save_report_lang(lang)
+        return jsonify({"lang": lang})
+
     # ---------- 报告 ----------
 
     # 报告只读接口公开（供公开报告页 /reports/* 免登录浏览；管理数据走 /api/summary）
@@ -667,16 +685,22 @@ def create_app() -> Flask:
 
     @app.get("/api/reports/<name>")
     def report_detail(name: str) -> Any:
-        # 仅允许已知命名（analysis 或 YYYY-MM-DD 每日归档），拒绝路径穿越
+        # 仅允许已知命名（analysis 或 YYYY-MM-DD 每日归档），拒绝路径穿越；
+        # ?lang=zh|en 选择语言：en 读 .en.md 后缀，zh 无后缀（兼容旧文件）。
         stem = Path(name).name
         if stem != FULL_REPORT_NAME and not DAILY_NAME_RE.fullmatch(stem):
             return jsonify({"error": "not_found", "message": "报告不存在"}), 404
-        path = REPORT_DIR / f"{stem}.md"
+        rlang = request.args.get("lang", "zh")
+        if rlang not in ("zh", "en"):
+            rlang = "zh"
+        suffix = ".en" if rlang == "en" else ""
+        path = REPORT_DIR / f"{stem}{suffix}.md"
         if not path.is_file():
             return jsonify({"error": "not_found", "message": "报告不存在，请先运行一次分析"}), 404
         return jsonify(
             {
                 "name": path.stem,
+                "language": rlang,
                 "updated_at": path.stat().st_mtime,
                 "content": path.read_text(encoding="utf-8", errors="replace"),
             }

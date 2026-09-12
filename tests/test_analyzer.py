@@ -145,7 +145,7 @@ def test_analyze_cache_hit(env, monkeypatch):
     topics = [_post(i) for i in range(20)]  # 1 批 = 1 个缓存文件
     run_id = hashlib.md5("".join(p.id for p in topics).encode("utf-8")).hexdigest()[:12]
     analyzer.CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    (analyzer.CACHE_DIR / f"{run_id}_b0_multi.json").write_text(
+    (analyzer.CACHE_DIR / f"{run_id}_b0_multi_zh.json").write_text(
         json.dumps({"result": {key: "[#1] 洞察" for key, _, _ in analyzer.CATEGORIES}}),
         encoding="utf-8",
     )
@@ -410,7 +410,7 @@ def test_main_empty_data_full_crawl_still_analyzes(env, monkeypatch, capsys):
     )
     monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "[#1] 洞察")
 
-    def fake_run_crawl(config, source_name=None, today=False):
+    def fake_run_crawl(config, source_name=None, today=False, lang="zh"):
         # 模拟真实爬虫：写入帖子文件，并把 last_crawl 置为当前时刻
         _make_post_file(analyzer.DATA_DIR / "v2ex" / "python", _post(1))
         state = analyzer.load_state()
@@ -444,7 +444,7 @@ def test_main_mixed_empty_source_still_analyzes(env, monkeypatch, capsys):
     _make_post_file(analyzer.DATA_DIR / "a" / "x", _post(1))  # a 已有数据
     analyzer.save_state({"a": {"last_crawl": 100, "last_analysis": 200}})  # a 增量点
 
-    def fake_run_crawl(config, source_name=None, today=False):
+    def fake_run_crawl(config, source_name=None, today=False, lang="zh"):
         # 只给空的来源 b 写帖子，并把 last_crawl 置为当前时刻；a 不新增
         _make_post_file(analyzer.DATA_DIR / "b" / "y", _post(2))
         st = analyzer.load_state()
@@ -533,3 +533,86 @@ def test_build_organize_prompt_keeps_marker_rule():
     assert "只做整理分组" in prompt
     assert "[#帖子ID]" in prompt
     assert "### 子主题名" in prompt
+
+
+# ---------- 英文报告（--lang en / ANALYZE_LANG=en） ----------
+
+
+def test_resolve_lang_priority(monkeypatch):
+    monkeypatch.delenv("ANALYZE_LANG", raising=False)
+    assert analyzer.resolve_lang(None) == "zh"  # 无参默认中文
+    assert analyzer.resolve_lang("en") == "en"
+    assert analyzer.resolve_lang("fr") == "zh"  # 非法值回落默认
+    monkeypatch.setenv("ANALYZE_LANG", "en")
+    assert analyzer.resolve_lang(None) == "en"
+    assert analyzer.resolve_lang("zh") == "zh"  # --lang 优先于环境变量
+
+
+def test_english_categories_and_prompt():
+    assert [t for _, t, _ in analyzer._categories("en")] == ["Product Ideas", "User Pain Points", "Opportunities"]
+    prompt = analyzer.build_multi_prompt("batch text", idx=0, total=1, lang="en")
+    for _, title, _ in analyzer._categories("en"):
+        assert f"## {title}" in prompt
+    assert "Answer in English" in prompt
+    assert "产品创意" not in prompt
+
+
+def test_is_empty_result_by_language():
+    assert analyzer.is_empty_result("无", "zh")
+    assert analyzer.is_empty_result("None", "en")
+    assert analyzer.is_empty_result("  nothing. ", "en")
+    assert not analyzer.is_empty_result("- item", "en")
+
+
+def test_parse_multi_english_sections():
+    raw = "## Product Ideas\n- [#1] insight\n## User Pain Points\nNone\n## Opportunities\n\n- [#2] chance"
+    out = analyzer.parse_multi(raw, "en")
+    assert out["ideas"].startswith("- [#1]")
+    assert out["pain"] == ""  # 「None」视为空
+    assert out["indie"].startswith("- [#2]")
+
+
+def test_build_report_english():
+    report = analyzer.build_report(
+        {"Product Ideas": "- thing — [来源](https://x)", "User Pain Points": ""},
+        3,
+        "v2ex(python)",
+        "2026-09-10",
+        "en",
+    )
+    assert report.startswith("# 2026-09-10")
+    assert "Sources: v2ex(python)" in report
+    assert "Generated from 3 posts" in report
+    assert "No insights found this round" in report  # 空类别占位
+
+
+def test_report_stem_by_language(env):
+    today = analyzer.time.strftime("%Y-%m-%d")
+    assert analyzer.report_stem(incremental=True, lang="zh") == today
+    assert analyzer.report_stem(incremental=True, lang="en") == today + ".en"
+    assert analyzer.report_stem(incremental=False, lang="zh") == "analysis"
+    assert analyzer.report_stem(incremental=False, lang="en") == "analysis.en"
+
+
+def test_write_report_english_files(env):
+    analyzer.write_report("# English daily", incremental=True, lang="en")
+    analyzer.write_report("# English full", incremental=False, lang="en")
+    daily = analyzer.REPORT_DIR / (analyzer.time.strftime("%Y-%m-%d") + ".en.md")
+    assert daily.read_text(encoding="utf-8").startswith("# English daily")
+    assert (analyzer.REPORT_DIR / "analysis.en.md").exists()
+    assert not (analyzer.REPORT_DIR / _today_name()).exists()  # 不写中文文件
+
+
+def test_analyze_english_end_to_end(env, monkeypatch):
+    topics = [_post(1), _post(2)]
+    monkeypatch.setattr(
+        analyzer,
+        "call_api",
+        lambda prompt, **kw: (
+            "## Product Ideas\n- [#1] 洞察\n## User Pain Points\n- [#1] 痛点\n## Opportunities\n- [#2] 机会"
+        ),
+    )
+    merged = analyzer.analyze(topics, incremental=False, language="en")
+    assert set(merged) == {"Product Ideas", "User Pain Points", "Opportunities"}
+    assert "[来源]" in merged["Product Ideas"]  # 链接还原仍生效
+    assert not list(analyzer.CACHE_DIR.glob("*.json"))  # 分析完清理缓存

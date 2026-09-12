@@ -129,6 +129,7 @@ class TaskManager:
             task: dict[str, Any] = {
                 "id": task_id,
                 "mode": mode,
+                "lang": env.get("ANALYZE_LANG", "zh"),
                 "status": "running",
                 "started_at": _now(),
                 "finished_at": None,

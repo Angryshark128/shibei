@@ -58,6 +58,18 @@ export function SettingsView() {
   // 来源开关（按 name 记录保存中状态）
   const [toggling, setToggling] = useState<Record<string, boolean>>({});
 
+  // 报告语言（新分析生成报告的语言）
+  const [reportLang, setReportLang] = useState<"zh" | "en">("zh");
+
+  useEffect(() => {
+    void api
+      .reportLang()
+      .then((d) => setReportLang(d.lang))
+      .catch(() => {
+        // 读取失败保持默认中文
+      });
+  }, []);
+
   useEffect(() => {
     void (async () => {
       try {
@@ -339,6 +351,33 @@ export function SettingsView() {
               onChange={(v) => {
                 setTimezonePref(v);
                 toast.push("success", t("settings.saveSuccess"));
+              }}
+            />
+          </div>
+        </CardBody>
+      </Card>
+
+      {/* 报告语言 */}
+      <Card>
+        <CardHeader title={t("settings.reportLangSection")} desc={t("settings.reportLangDesc")} />
+        <CardBody>
+          <p className="mb-2 text-xs leading-5 text-ink-400 dark:text-surface-4">{t("settings.reportLangHint")}</p>
+          <div className="max-w-xs">
+            <Select
+              aria-label={t("settings.reportLangSection")}
+              alignUp
+              value={reportLang}
+              options={[
+                { value: "zh", label: t("settings.reportLangZh") },
+                { value: "en", label: t("settings.reportLangEn") },
+              ]}
+              onChange={(v) => {
+                const lang = v as "zh" | "en";
+                setReportLang(lang);
+                void api
+                  .saveReportLang(lang)
+                  .then(() => toast.push("success", t("settings.saveSuccess")))
+                  .catch(() => toast.push("error", t("settings.saveFailedNetwork")));
               }}
             />
           </div>

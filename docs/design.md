@@ -45,7 +45,7 @@
 │   └── producthunt.py   # Product Hunt（RSS）
 ├── data/                # 运行时数据（gitignored，不入库）
 │   ├── state.json       # 运行状态（按来源记录时间戳）
-│   ├── analysis/        # 分析报告（analysis.md / analysis_today.md）
+│   ├── analysis/        # 分析报告（analysis[.en].md / YYYY-MM-DD[.en].md）
 │   ├── .cache/          # 中间缓存
 │   └── {source}/{node}/{id}.json   # 每个来源一个子目录
 ├── tests/               # pytest 测试
@@ -100,6 +100,7 @@
 | `OPENAI_BASE_URL` | 是 | OpenAI 兼容 API 地址（环境变量或 config.json `llm.base_url` 二选一） |
 | `ANALYZE_MODEL` | 是 | 模型名（环境变量或 config.json `llm.model` 二选一；不同厂商支持的模型各不相同，无内置默认） |
 | `ANALYZE_MAX_TOKENS` | 否 | 单次输出上限（config.json `llm.max_tokens` → 默认 `4096`；个别厂商上限更低需调小） |
+| `ANALYZE_LANG` | 否 | 报告与任务日志语言（`zh` 默认 / `en`）；CLI `--lang` 参数优先于此 |
 
 设计要点：
 
@@ -276,10 +277,11 @@ SOURCES = {
 
 ### 6.3 run_crawl（可复用编排）
 
-`run_crawl(config, source_name=None, today=False)` —— 供 CLI 与 analyzer 复用：
+`run_crawl(config, source_name=None, today=False, lang="zh")` —— 供 CLI 与 analyzer 复用：
 
 - `today=True`：按 state 的 `last_crawl` 增量爬取并更新 `last_crawl`。
 - `today=False`：全量爬取、不更新时间戳。
+- `lang`：爬取日志语言（`zh`/`en`），由 analyzer 传入当前分析语言。
 - **来源间并行**（`ThreadPoolExecutor`）：不同来源是独立端点、限流互不影响，`request_delay` 各自保护；并行后墙钟 ≈ 最慢来源而非总和。state 写入用锁保护，防止并行丢键。
 - **单来源失败不影响其他来源**（try/except 包裹）。
 - 分析侧本就并发：`analyze()` 在（批次 × 类别）层用 `max_workers=4`，跨来源的 LLM 调用共享同一 API Key，无需按来源再并行。
@@ -290,6 +292,7 @@ SOURCES = {
 python3 crawler.py                   # 全量爬取所有 enabled 来源
 python3 crawler.py --source v2ex     # 只爬指定来源
 python3 crawler.py --today           # 增量爬取
+python3 crawler.py --lang en         # 日志用英文（zh/en，默认 zh）
 python3 crawler.py list [关键词]      # 列出节点
 ```
 
@@ -301,13 +304,13 @@ crawler.py 是**可选独立工具**（手动爬取 / 调试 / 列节点），�
 
 ### 7.1 分类体系
 
-三个分析模块（对应报告页「产品创意 / 用户痛点 / 潜在机会」三个文档），每个模块独立分析 + 独立合并，再按子主题分组（H3）：
+三个分析模块（对应报告页「产品创意 / 用户痛点 / 潜在机会」三个文档），每个模块独立分析 + 独立合并，再按子主题分组（H3）。分类表按语言定义（`CATEGORIES_BY_LANG`）：中文 `产品创意 / 用户痛点 / 潜在机会`，英文 `Product Ideas / User Pain Points / Opportunities`；分析语言由 `--lang` / `ANALYZE_LANG`（CLI）或 Web 设置页「报告语言」决定，默认中文。
 
-| key | 标题 | 定义 |
+| key | 标题（zh / en） | 定义 |
 |---|---|---|
-| `ideas` | 产品创意 | 帖子中提到或暗示的、有价值的想法、工具需求和产品方向 |
-| `pain` | 用户痛点 | 用户反复抱怨、求助、表达不满的问题 |
-| `indie` | 潜在机会 | 对独立开发者/小团队友好、低门槛、可快速验证的方向与机会 |
+| `ideas` | 产品创意 / Product Ideas | 帖子中提到或暗示的、有价值的想法、工具需求和产品方向 |
+| `pain` | 用户痛点 / User Pain Points | 用户反复抱怨、求助、表达不满的问题 |
+| `indie` | 潜在机会 / Opportunities | 对独立开发者/小团队友好、低门槛、可快速验证的方向与机会 |
 
 ### 7.2 Prompt 设计
 
@@ -347,6 +350,7 @@ crawler.py 是**可选独立工具**（手动爬取 / 调试 / 列节点），�
 - 正文截断 500 字符，每帖最多 10 条回复，每条回复截断 200 字符。
 - **每帖用 `[#{id}]` 做稳定锚点**：与 LLM 输出格式、链接还原正则三者一致。
 - **URL 不注入 prompt**——最终输出由代码还原为可点击链接，避免 LLM 杜撰/截断 URL。
+- **语言随分析语言切换**：类别标题、规则文案与语言指令（zh「一律用中文回答」/ en「Answer in English」）均按语言生成；空结果占位词按语言识别（zh「无」/ en「None」）。
 
 **合并 + 分组 prompt**：每类一次调用，把该类各批结果合并去重并分组（每组一行 `### 分类名`，≤8 组），并注明「今日新增分析」；失败时回退「层级合并 + 分组」两步，两级都失败则原样拼接各批结果，保证不丢内容。
 
@@ -357,6 +361,7 @@ crawler.py 是**可选独立工具**（手动爬取 / 调试 / 列节点），�
 - 参数：`BATCH_SIZE = 20`（每批 20 帖）、`MULTI_MAX_TOKENS = 8192`、并发 `max_workers = 4`。
 - **省 token 的两级调用**：① 每批帖子只调一次 LLM、一次输出全部类别（正文不再按类重复发送）；② 每类再各调一次完成「合并去重 + 分类分组」。相比「批 × 类逐次调用 + 全量合并 + 全量分组」，输入 token 约降 2/3、调用次数约降 60%+。
 - 计算 `run_id`，`id2link` 映射（id → title,url）；分批并行调用，带 run_id 缓存（命中直接用）。
+- **缓存按语言隔离**：批次缓存文件为 `{run_id}_b{batch}_multi_{lang}.json`，同一批帖子多语言运行不会误命中他语言结果。
 - 多类输出未按 `## 类别` 分节（无法解析）时，回退为按类逐次调用（保底路径）。
 - **链接还原**（代码层、确定性）：正则 `\[#([^\]]+)\]` 替换为 `[来源](原帖URL)`，URL 取自帖子 JSON，不经过 LLM；未知 ID 保留原文并告警。
 - `cleanup_cache(run_id)` 清理本次缓存。
@@ -370,15 +375,16 @@ crawler.py 是**可选独立工具**（手动爬取 / 调试 / 列节点），�
 
 ### 7.5 报告
 
-- 报告格式：标题「拾贝 · 多来源分析」+ 来源摘要 + 帖子数 + 四个分类小节。
-- 每条来源是**可点击链接** `[帖子标题](原帖URL)`（代码还原，见 7.3）。
-- 写入 `data/analysis/analysis.md`（全量）或 `analysis_today.md`（增量），结束**打印绝对路径**。
+- 报告格式：一级标题为生成日期（全量时附「全量总览」/「Full Overview」）+ 来源摘要 + 帖子数 + 三个分类小节（分类标题随语言）。
+- 每条来源是**可点击链接** `[来源](原帖URL)`（代码还原，见 7.3）。
+- 落盘命名：全量 `data/analysis/analysis.md`，增量 `data/analysis/YYYY-MM-DD.md`（每天一份、同日多次运行刷新）；英文报告加 `.en` 后缀（`analysis.en.md` / `YYYY-MM-DD.en.md`）。Web 报告页按界面语言取对应文件，缺失该语言版本时回退显示另一份并提示。结束**打印绝对路径**。
 
 ### 7.6 CLI（单一入口）
 
 ```
-python3 analyzer.py          # 默认：自动增量爬取 + 增量分析（数据为空时自动全量）
-python3 analyzer.py --full   # 强制全量：自动爬取 + 重分析全部帖子
+python3 analyzer.py                  # 默认：自动增量爬取 + 增量分析（数据为空时自动全量）
+python3 analyzer.py --full           # 强制全量：自动爬取 + 重分析全部帖子
+python3 analyzer.py --lang en        # 报告与日志用英文（zh/en，默认 zh）
 ```
 
 环境变量检查：`OPENAI_API_KEY` 缺失 → `exit(1)` 并打印配置说明（含 URL 必填提示）。

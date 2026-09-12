@@ -1,5 +1,18 @@
 # 拾贝 · 项目状态
 
+## [2026-09-12] 中英双语（界面 + 报告内容）
+
+### 现状
+- **报告语言可切换**：语言由 CLI `--lang` / `ANALYZE_LANG` 或 Web 设置页「报告语言」（`data/web_report_lang.json`）决定，默认中文。分类表 `CATEGORIES_BY_LANG`、prompt 语言指令（zh「一律用中文回答」/ en「Answer in English」）、空结果词（无 / None）、报告模板、CLI 与任务日志全部语言化；批次缓存按语言隔离（`{run_id}_b{i}_multi_{lang}.json`）。
+- **报告文件命名**：英文 `analysis.en.md` / `YYYY-MM-DD.en.md`，中文沿用原名（向后兼容）。`/api/reports` 每项带 `lang`；`/api/reports/<name>?lang=` 按语言读取；新增 `GET/PUT /api/report-lang`。
+- **手动与定时任务统一**：`_run_env()` 注入 `ANALYZE_LANG`，任务索引记录 `lang`（运行历史显示语言徽标）。
+- **界面**：设置页新增「报告语言」卡片；报告页按界面语言取对应版本，暂缺该语言时回退显示并提示；标语改为「独立开发者的社区情报」/「Community Intelligence for Indie Developers」。
+- 质量门：pytest 126 绿、ruff / pyright 0 错、tsc + vite build 过；web 接口冒烟（报告列表/详情语言、lang 接口鉴权与校验、任务 lang、`ANALYZE_LANG` 注入）全过。
+
+### 下一步
+- 需要历史报告双语并存时，用另一语言重跑对应分析（当日无新帖可先 `--full`）
+- 报告增强（P2）；更多来源（Reddit / 即刻）
+
 ## [2026-09-07 · 晚] v0.2.0 发布 + 生产部署 wjbd.site/shibei/
 
 ### 现状
@@ -14,6 +27,7 @@
 ### 下一步
 - 用户重填真实 API Key（fake 已清）
 - 报告增强（P2）；更多来源（Reddit/即刻）
+- 防爬机制（P2）：遵守 robots.txt + 防御性措施（限速、指数退避、随机抖动、并发上限），避免过度占用目标站点带宽/触发封锁；现状仅有 request_delay 与列表缓存
 
 ## [2026-09-07] Web 界面 + Docker 部署
 

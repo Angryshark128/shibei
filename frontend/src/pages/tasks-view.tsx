@@ -149,9 +149,12 @@ export function TasksView() {
                       {formatTime(task.started_at, tz)}
                     </td>
                     <td className="px-4 py-3">
-                      <Badge variant={task.mode === "full" ? "brand" : "neutral"}>
-                        {task.mode === "full" ? t("tasks.modeFull") : t("tasks.modeToday")}
-                      </Badge>
+                      <div className="flex items-center gap-1.5">
+                        <Badge variant={task.mode === "full" ? "brand" : "neutral"}>
+                          {task.mode === "full" ? t("tasks.modeFull") : t("tasks.modeToday")}
+                        </Badge>
+                        {task.lang && <Badge variant="neutral">{task.lang === "en" ? t("tasks.langEn") : t("tasks.langZh")}</Badge>}
+                      </div>
                     </td>
                     <td className="px-4 py-3">{statusBadge(task, t)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-ink-500 dark:text-surface-4">

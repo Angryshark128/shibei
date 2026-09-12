@@ -15,6 +15,7 @@
 - **CLI 零第三方依赖**：命令行工具只用标准库 `urllib`，开箱即跑；Web 界面独立提供，不影响 CLI。
 - **LLM 自带 URL + Key**：只支持 OpenAI 协议（DeepSeek / OpenRouter / Ollama / vLLM 等均兼容），URL 与 Key 缺失即退出，不误发到官方端点。
 - **可点击来源**：报告每条洞察的「来源帖子」是代码还原的真实原帖链接，不经过 LLM，杜绝杜撰 URL。
+- **中英双语**：界面、报告内容、任务日志均可切换中文 / English。分析语言由 CLI `--lang` / `ANALYZE_LANG` 或 Web 设置页「报告语言」决定；报告页按界面语言显示对应版本，暂缺时回退并提示。
 - **省成本**：今日列表缓存 + 分析 run_id 缓存，重跑不重复请求；正文/回复截断控制 token。
 
 ## 环境要求
@@ -59,6 +60,9 @@ uv run python analyzer.py
 
 # 强制全量重分析
 uv run python analyzer.py --full
+
+# 生成英文报告与英文日志（等价于 ANALYZE_LANG=en）
+uv run python analyzer.py --lang en
 ```
 
 首次运行会自动全量爬取并全量分析；之后每天跑一条 `analyzer.py` 即可。
@@ -119,7 +123,8 @@ $ uv run python analyzer.py
 - **Webhook 通知**：任务完成（成功/失败）时向自定义地址发送 JSON，支持 Header Key + Token，界面可发测试。
 - **AI 配置**：接口地址 / 模型 / API Key / 最大 Token 界面保存，支持连通性测试（展示服务商原始错误）；API Key 只存本机（`data/web_secrets.json`，0600）。
 - **来源开关**：停用不需要的社区。
-- **主题**：5 主题色 × 明暗，中英双语，符合[前端约束规范]设计令牌体系。
+- **主题**：5 主题色 × 明暗，中英双语（界面 + 报告内容），符合[前端约束规范]设计令牌体系。
+- **报告语言**：设置页可选中文 / English，决定新分析生成的报告与任务日志语言（历史报告保持原语言，报告页自动回退显示并提示）。
 
 ### 快速开始
 
@@ -208,6 +213,7 @@ cd frontend && npm install && npm run dev                             # :5173
 | `OPENAI_BASE_URL` | ✅ | API 地址（或用 config.json 的 `llm.base_url`） |
 | `ANALYZE_MODEL` | ✅ | 模型名（或用 config.json 的 `llm.model`），无内置默认 |
 | `ANALYZE_MAX_TOKENS` | | 单次输出上限（默认取 `llm.max_tokens`，兜底 4096） |
+| `ANALYZE_LANG` | | 报告与任务日志语言：`zh`（默认）/ `en`；`--lang` 参数优先于此 |
 
 ### 常用 OpenAI 协议 API 示例
 
@@ -246,7 +252,9 @@ data/
 ├── state.json                 # 各来源 last_crawl / last_analysis
 ├── analysis/
 │   ├── analysis.md            # 全量报告
-│   └── analysis_today.md      # 增量报告
+│   ├── analysis.en.md         # 全量报告（英文）
+│   ├── YYYY-MM-DD.md          # 每日增量报告（每天一份，同日多次运行刷新）
+│   └── YYYY-MM-DD.en.md       # 每日增量报告（英文）
 ├── .cache/                    # 列表缓存 + 分析缓存（分析后自动清理）
 └── {source}/{node}/{id}.json  # 统一结构帖子（每来源一目录）
 ```
@@ -304,11 +312,13 @@ data/
 # analyzer.py（单一入口）
 uv run python analyzer.py               # 自动增量爬取 + 增量分析（空数据自动全量）
 uv run python analyzer.py --full        # 强制全量
+uv run python analyzer.py --lang en     # 英文报告与日志（zh/en，默认 zh）
 
 # crawler.py（可选独立工具）
 uv run python crawler.py                # 全量爬取
 uv run python crawler.py --today        # 增量爬取
 uv run python crawler.py list [关键词]   # 列出可用节点
+uv run python crawler.py --today --lang en   # 英文日志
 ```
 
 ## 开发
@@ -327,6 +337,7 @@ uv run pre-commit run --all-files        # 见 .pre-commit-config.yaml
 - [x] Docker 镜像 + Web 界面（报告查看 / 主动触发 / AI 配置 / 登录，nginx 子路径部署）
 - [x] 每日定时调度（默认 00:00 增量分析，Web 可配置）
 - [ ] 报告增强：分类标签、历史对比、导出其它格式
+- [ ] 防爬机制：遵守 robots.txt，并加防御性措施（限速、指数退避、随机抖动、并发上限），避免过度占用目标站点带宽
 
 ## 贡献
 

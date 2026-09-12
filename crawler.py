@@ -65,7 +65,34 @@ def load_json(path: Path) -> Any:
         return json.load(f)
 
 
-def get_sources(source_name: str | None, config: dict[str, Any]) -> list[Source]:
+# CLI 文案（按语言输出，让爬取日志随分析语言切换；默认中文）
+_CRAWL_UI: dict[str, dict[str, str]] = {
+    "zh": {
+        "no_sources": "没有可用来源，请检查 config.json 的 sources 节（enabled）。",
+        "crawl_failed": "[!] 来源 {name} 爬取失败: {err}",
+        "new_posts": "[{name}] 新增 {n} 帖",
+        "no_nodes": "  (无节点数据)",
+        "interrupted": "\n[!] 已中断（Ctrl+C）。已爬取的数据均已保存，下次运行自动续传。",
+        "done": "完成，共新增 {n} 帖",
+    },
+    "en": {
+        "no_sources": "No available sources. Check the sources section (enabled) in config.json.",
+        "crawl_failed": "[!] Source {name} crawl failed: {err}",
+        "new_posts": "[{name}] {n} new posts",
+        "no_nodes": "  (no node data)",
+        "interrupted": "\n[!] Interrupted (Ctrl+C). Scraped data is saved; the next run resumes.",
+        "done": "Done — {n} new posts in total",
+    },
+}
+
+
+def _t(lang: str, key: str, **kw: Any) -> str:
+    """按语言取 CLI 文案；未知语言回落 zh。"""
+    table = _CRAWL_UI.get(lang) or _CRAWL_UI["zh"]
+    return table.get(key, "").format(**kw)
+
+
+def get_sources(source_name: str | None, config: dict[str, Any], lang: str = "zh") -> list[Source]:
     """按 config 的 enabled 过滤来源；指定 source_name 时只保留该来源。
 
     来源必须出现在 config 的 sources 节且 enabled 为真才启用（新来源需先加配置节，
@@ -85,7 +112,7 @@ def get_sources(source_name: str | None, config: dict[str, Any]) -> list[Source]
             )
         )
     if not sources:
-        raise SystemExit("没有可用来源，请检查 config.json 的 sources 节（enabled）。")
+        raise SystemExit(_t(lang, "no_sources"))
     return sources
 
 
@@ -161,27 +188,38 @@ def crawl(source: Source, nodes: list[str], pages: int, since: int | None = None
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="crawler.py",
-        description="拾贝爬虫：抓取社区帖子存为本地 JSON（多来源）。",
+        description=(
+            "拾贝爬虫：抓取社区帖子存为本地 JSON（多来源）。\n"
+            "Shibei crawler: scrape community posts to local JSON (multi-source)."
+        ),
     )
     parser.add_argument(
         "command",
         nargs="?",
         default="crawl",
         choices=["crawl", "list"],
-        help="crawl=爬取（默认），list=列出节点",
+        help="crawl=爬取（默认），list=列出节点 / crawl (default), list=list nodes",
     )
-    parser.add_argument("--source", default=None, help="只处理指定来源（如 v2ex）")
-    parser.add_argument("--today", action="store_true", help="增量爬取（只爬上次之后的帖子）")
-    parser.add_argument("keyword", nargs="?", default=None, help="list 模式的节点关键词过滤")
+    parser.add_argument("--source", default=None, help="只处理指定来源（如 v2ex）/ only process one source")
+    parser.add_argument("--today", action="store_true", help="增量爬取（只爬上次之后的帖子）/ incremental crawl")
+    parser.add_argument(
+        "--lang",
+        choices=("zh", "en"),
+        default="zh",
+        help="日志语言（zh/en），默认 zh / log language, default zh",
+    )
+    parser.add_argument(
+        "keyword", nargs="?", default=None, help="list 模式的节点关键词过滤 / filter node list by keyword"
+    )
     return parser
 
 
 def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> int:
-    for source in get_sources(args.source, config):
+    for source in get_sources(args.source, config, args.lang):
         print(f"\n== {source.display_name} ==")
         nodes = source.list_nodes()
         if not nodes:
-            print("  (无节点数据)")
+            print(_t(args.lang, "no_nodes"))
             continue
         for n in nodes:
             name, title = n.get("name", ""), n.get("title", "")
@@ -191,7 +229,7 @@ def cmd_list(args: argparse.Namespace, config: dict[str, Any]) -> int:
     return 0
 
 
-def run_crawl(config: dict[str, Any], source_name: str | None = None, today: bool = False) -> int:
+def run_crawl(config: dict[str, Any], source_name: str | None = None, today: bool = False, lang: str = "zh") -> int:
     """爬取全部 enabled 来源（或指定来源），返回新增帖数。供 CLI 与 analyzer 复用。
 
     today=True 时按 state 的 last_crawl 增量爬取，并更新 last_crawl；
@@ -200,7 +238,7 @@ def run_crawl(config: dict[str, Any], source_name: str | None = None, today: boo
     来源之间并行（ThreadPoolExecutor）：不同来源是独立端点、限流互不影响，
     request_delay 各自保护自己，串行纯属浪费。state 写入用锁保护防丢键。
     """
-    sources = get_sources(source_name, config)
+    sources = get_sources(source_name, config, lang)
     state = load_state()
     state_lock = threading.Lock()
     total_new = 0
@@ -214,14 +252,14 @@ def run_crawl(config: dict[str, Any], source_name: str | None = None, today: boo
         try:
             new = crawl(source, nodes, pages, since=since)
         except Exception as e:  # 单来源失败不影响其他来源
-            print(f"[!] 来源 {source.display_name} 爬取失败: {e}", file=sys.stderr)
+            print(_t(lang, "crawl_failed", name=source.display_name, err=e), file=sys.stderr)
             return 0
 
         if today:
             with state_lock:  # 共享 state 读写加锁，避免并行丢键
                 state.setdefault(source.name, {})["last_crawl"] = int(time.time())
                 save_state(state)
-        print(f"[{source.display_name}] 新增 {new} 帖")
+        print(_t(lang, "new_posts", name=source.display_name, n=new))
         return new
 
     pool = ThreadPoolExecutor(max_workers=len(sources))
@@ -239,17 +277,18 @@ def run_crawl(config: dict[str, Any], source_name: str | None = None, today: boo
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = load_config()
+    lang = args.lang
 
     try:
         if args.command == "list":
             return cmd_list(args, config)
-        total_new = run_crawl(config, source_name=args.source, today=args.today)
+        total_new = run_crawl(config, source_name=args.source, today=args.today, lang=lang)
     except KeyboardInterrupt:
         # 优雅退出：os._exit 绕过解释器对非守护工作线程的 join，立即结束；
         # 数据均原子写，已保存内容不丢，下次运行自动断点续传。
-        print("\n[!] 已中断（Ctrl+C）。已爬取的数据均已保存，下次运行自动续传。", file=sys.stderr, flush=True)
+        print(_t(lang, "interrupted"), file=sys.stderr, flush=True)
         os._exit(130)
-    print(f"完成，共新增 {total_new} 帖")
+    print(_t(lang, "done", n=total_new))
     return 0
 
 

@@ -22,6 +22,7 @@ export interface AppConfig {
 export interface TaskItem {
   id: string;
   mode: "today" | "full";
+  lang?: "zh" | "en";
   status: "running" | "succeeded" | "failed" | "interrupted";
   started_at: number | null;
   finished_at: number | null;
@@ -44,6 +45,7 @@ export interface RunResponse {
 export interface ReportMeta {
   name: string;
   kind: "daily" | "full";
+  lang: "zh" | "en";
   file: string;
   updated_at: number | null;
   size: number;
@@ -51,8 +53,13 @@ export interface ReportMeta {
 
 export interface ReportData {
   name: string;
+  language: "zh" | "en";
   updated_at: number | null;
   content: string;
+}
+
+export interface ReportLangConfig {
+  lang: "zh" | "en";
 }
 
 export interface Summary {

@@ -62,5 +62,6 @@ def send_task_finished(task: dict[str, Any]) -> None:
 def send_test() -> bool:
     """发送测试事件，返回是否送达（无 URL 也返回 False）。"""
     cfg = st.load_webhook()
-    payload = {"event": "test", "timestamp": time.time(), "message": "拾贝 Webhook 测试"}
+    message = "拾贝 Webhook 测试" if st.load_report_lang() == "zh" else "Shibei webhook test"
+    payload = {"event": "test", "timestamp": time.time(), "message": message}
     return _post(cfg, payload)

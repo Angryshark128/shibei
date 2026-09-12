@@ -1,7 +1,8 @@
-import { ArrowUp, ChevronRight, FileText, FileX, Loader2, RefreshCw, Shell } from "lucide-react";
+import { ArrowUp, ChevronRight, FileText, FileX, Info, Loader2, RefreshCw, Shell } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
+import i18n, { currentLocale } from "@/i18n";
 import { EmptyState } from "@/components/ui/empty";
 import { ErrorBlock } from "@/components/ui/error";
 import { Button } from "@/components/ui/button";
@@ -66,12 +67,26 @@ export function ReportsView() {
   const { name } = useParams();
   const paramName = name ?? "";
 
+  /** 报告展示语言：跟随 UI 语言（zh-CN→zh / en-US→en），切换时同步刷新 */
+  const [preferredLang, setPreferredLang] = useState<"zh" | "en">(() =>
+    currentLocale() === "en-US" ? "en" : "zh",
+  );
+
+  useEffect(() => {
+    const handler = () => setPreferredLang(currentLocale() === "en-US" ? "en" : "zh");
+    i18n.on("languageChanged", handler);
+    return () => {
+      i18n.off("languageChanged", handler);
+    };
+  }, []);
+
   const [metaList, setMetaList] = useState<ReportMeta[] | null>(null);
   const [metaError, setMetaError] = useState(false);
   const [content, setContent] = useState<{ text: string; updated_at: number | null } | null>(null);
   const [contentLoading, setContentLoading] = useState(true);
   const [contentError, setContentError] = useState(false);
   const [notFound, setNotFound] = useState(false);
+  const [langFallback, setLangFallback] = useState(false);
   const [activeDoc, setActiveDoc] = useState(0);
   const [showTop, setShowTop] = useState(false);
   /** 各日期报告的目录（日期 → 文档/分类树），展开树时按需加载 */
@@ -81,13 +96,36 @@ export function ReportsView() {
   /** 跨日期跳转时，等内容渲染完成后滚动到目标锚点 */
   const pendingScroll = useRef<{ secId: string; docIndex: number } | null>(null);
 
-  /** 每日归档日期列表（后端按日期倒序，最新在前） */
-  const dates = useMemo(
-    () => (metaList ?? []).filter((r) => r.kind === "daily").map((r) => r.name),
-    [metaList],
+  /** 按基名分组的报告（同一份报告可有 zh/en 两种语言文件） */
+  const byName = useMemo(() => {
+    const map = new Map<string, ReportMeta[]>();
+    for (const r of metaList ?? []) map.set(r.name, [...(map.get(r.name) ?? []), r]);
+    return map;
+  }, [metaList]);
+
+  /** 每日归档日期列表（后端按日期倒序，最新在前；多语言文件合并为一个日期） */
+  const dates = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const r of metaList ?? []) {
+      if (r.kind !== "daily" || seen.has(r.name)) continue;
+      seen.add(r.name);
+      out.push(r.name);
+    }
+    return out;
+  }, [metaList]);
+
+  /** 优先取偏好语言的文件，缺失时回退任意一份（回退时正文显示提示条） */
+  const pickMeta = useCallback(
+    (n: string) => {
+      const items = byName.get(n) ?? [];
+      return items.find((r) => r.lang === preferredLang) ?? items[0];
+    },
+    [byName, preferredLang],
   );
+
   const mode: Mode = paramName === FULL_REPORT_NAME ? "full" : "daily";
-  const currentMeta = metaList?.find((r) => r.name === paramName);
+  const currentMeta = pickMeta(paramName);
 
   // ---------- 数据加载 ----------
 
@@ -104,26 +142,33 @@ export function ReportsView() {
     }
   }, []);
 
-  const loadContent = useCallback(async (n: string) => {
-    setContentLoading(true);
-    setContentError(false);
-    setNotFound(false);
-    try {
-      const d = await api.report(n);
-      setContent({ text: d.content, updated_at: d.updated_at });
-      setOutlines((o) => ({ ...o, [n]: parseDocs(d.content) }));
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 404) setNotFound(true);
-      else setContentError(true);
-    } finally {
-      setContentLoading(false);
-    }
-  }, []);
+  const loadContent = useCallback(
+    async (n: string) => {
+      setContentLoading(true);
+      setContentError(false);
+      setNotFound(false);
+      setLangFallback(false);
+      try {
+        const target = pickMeta(n);
+        const d = await api.report(n, target?.lang ?? preferredLang);
+        setContent({ text: d.content, updated_at: d.updated_at });
+        setOutlines((o) => ({ ...o, [n]: parseDocs(d.content) }));
+        setLangFallback(d.language !== preferredLang);
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404) setNotFound(true);
+        else setContentError(true);
+      } finally {
+        setContentLoading(false);
+      }
+    },
+    [pickMeta, preferredLang],
+  );
 
   useEffect(() => {
     void loadList();
   }, [loadList]);
 
+  // 切报告或界面语言时重载正文（语言切换后，同语言新报告立即生效）
   useEffect(() => {
     if (paramName) void loadContent(paramName);
   }, [paramName, loadContent]);
@@ -375,6 +420,12 @@ export function ReportsView() {
             />
           ) : content ? (
             <>
+              {langFallback && (
+                <div className="mb-3 flex items-start gap-2 rounded-lg border border-surface-3 bg-surface-1 px-3 py-2 text-xs leading-5 text-ink-500 dark:border-ink-900 dark:bg-ink-900 dark:text-surface-4">
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{t("reports.langFallback")}</span>
+                </div>
+              )}
               <Card>
                 <CardBody className="pt-6">
                   <MarkdownView content={content.text} />
