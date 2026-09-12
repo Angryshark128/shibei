@@ -4,6 +4,8 @@
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue) ![License](https://img.shields.io/badge/license-MIT-green) ![CLI](https://img.shields.io/badge/CLI%20deps-0-brightgreen) ![Web](https://img.shields.io/badge/Web-Flask%20%2B%20React-blue)
 
+**在线体验**：[shibei.hancic.site](https://shibei.hancic.site/)（报告页免登录，管理后台 `/admin` 需登录）
+
 ## 特性
 
 - **为独立开发者而生**：四类洞察直指「做什么、做给谁、值不值得做」——创意点子、用户痛点、低门槛机会、技术趋势。
