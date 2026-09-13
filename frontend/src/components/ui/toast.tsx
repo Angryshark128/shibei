@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle, Info, X, XCircle } from "lucide-react";
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 type ToastLevel = "success" | "error" | "warn" | "info";
@@ -29,6 +30,7 @@ const MAX_VISIBLE = 3;
 
 /** Toast 通知（规范 7.11）：顶部居中、success/info 3s 自动关、error/warn 手动关、最多 3 条 */
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const counter = useRef(0);
 
@@ -54,11 +56,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     <ToastContext.Provider value={value}>
       {children}
       <div aria-live="polite" className="fixed left-1/2 top-4 z-[60] flex w-full max-w-[480px] -translate-x-1/2 flex-col items-center gap-2 px-4">
-        {toasts.map((t) => {
-          const s = LEVEL_STYLE[t.level];
+        {toasts.map((item) => {
+          const s = LEVEL_STYLE[item.level];
           return (
             <div
-              key={t.id}
+              key={item.id}
               role="status"
               className={cn(
                 "pointer-events-auto relative flex w-full items-start gap-3 overflow-hidden rounded-lg px-4 py-3 shadow-md transition-all duration-200",
@@ -68,13 +70,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               <span className={cn("absolute inset-y-0 left-0 w-1", s.bar)} aria-hidden="true" />
               <s.Icon className={cn("mt-0.5 h-4 w-4 shrink-0", s.text)} aria-hidden="true" />
               <div className="min-w-0 flex-1">
-                <p className={cn("text-sm font-medium", s.text)}>{t.title}</p>
-                {t.desc && <p className="mt-0.5 text-xs text-ink-500 dark:text-surface-4">{t.desc}</p>}
+                <p className={cn("text-sm font-medium", s.text)}>{item.title}</p>
+                {item.desc && <p className="mt-0.5 text-xs text-ink-500 dark:text-surface-4">{item.desc}</p>}
               </div>
               <button
                 type="button"
-                onClick={() => dismiss(t.id)}
-                aria-label="关闭"
+                onClick={() => dismiss(item.id)}
+                aria-label={t("common.close")}
                 className="shrink-0 border-none bg-transparent p-0.5 text-ink-400 transition-colors hover:text-ink-900 dark:hover:text-surface-0"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
@@ -89,6 +91,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast 必须在 ToastProvider 内使用");
+  if (!ctx) throw new Error("useToast must be used within ToastProvider");
   return ctx;
 }

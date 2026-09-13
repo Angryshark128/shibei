@@ -1,6 +1,7 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 export interface ModalProps {
@@ -15,6 +16,7 @@ export interface ModalProps {
 
 /** 弹窗（规范 7.7）：遮罩 blur、焦点圈闭、Esc/遮罩/关闭按钮可关 */
 export function Modal({ open, onOpenChange, title, size = "md", children, footer }: ModalProps) {
+  const { t } = useTranslation();
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -42,7 +44,7 @@ export function Modal({ open, onOpenChange, title, size = "md", children, footer
               {title}
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
-              aria-label="关闭"
+              aria-label={t("common.close")}
               className="rounded-lg p-1 text-ink-400 transition-colors duration-150 hover:bg-surface-2 hover:text-ink-900 dark:hover:bg-ink-900 dark:hover:text-surface-0"
             >
               <X className="h-5 w-5" aria-hidden="true" />

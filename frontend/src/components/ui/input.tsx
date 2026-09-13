@@ -1,5 +1,6 @@
 import type { InputHTMLAttributes, ReactNode } from "react";
 import { useId, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Eye, EyeOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -53,6 +54,7 @@ export interface PasswordInputProps extends Omit<InputHTMLAttributes<HTMLInputEl
 
 /** 密码输入：右侧眼睛切换可见性（规范 7.4.3） */
 export function PasswordInput({ className, ...rest }: PasswordInputProps) {
+  const { t } = useTranslation();
   const [visible, setVisible] = useState(false);
   return (
     <div className="relative">
@@ -61,7 +63,7 @@ export function PasswordInput({ className, ...rest }: PasswordInputProps) {
         type="button"
         className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink-400 hover:text-ink-900 dark:hover:text-surface-0"
         onClick={() => setVisible((v) => !v)}
-        aria-label={visible ? "隐藏密码" : "显示密码"}
+        aria-label={visible ? t("common.hidePassword") : t("common.showPassword")}
         tabIndex={-1}
       >
         {visible ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}

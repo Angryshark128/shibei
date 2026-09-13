@@ -260,7 +260,7 @@ export function ReportsView() {
             <p className="truncate text-base font-semibold text-ink-900 dark:text-surface-0">
               {t("common.appName")}
             </p>
-            <p className="truncate text-xs text-ink-400 dark:text-surface-4">{t("common.appTagline")}</p>
+            <p className="text-xs leading-tight text-ink-400 dark:text-surface-4">{t("common.appTagline")}</p>
           </div>
         </div>
 

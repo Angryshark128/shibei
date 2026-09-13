@@ -27,12 +27,12 @@ export function TopBar({ username }: TopBarProps) {
             <span className="truncate text-base font-semibold leading-tight text-ink-900 dark:text-surface-0">
               {t("common.appName")}
             </span>
-            <span className="truncate text-xs leading-tight text-ink-400 dark:text-surface-4">
+            <span className="text-xs leading-tight text-ink-400 dark:text-surface-4">
               {t("common.appTagline")}
             </span>
           </span>
         </Link>
-        <nav aria-label="主导航" className="flex items-center gap-1">
+        <nav aria-label={t("nav.mainNav")} className="flex items-center gap-1">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}

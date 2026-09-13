@@ -2,6 +2,7 @@ const zhCN = {
   common: {
     appName: "拾贝",
     appTagline: "独立开发者的社区情报",
+    pageTitle: "拾贝 · 独立开发者的社区情报",
     save: "保存",
     saving: "保存中…",
     cancel: "取消",
@@ -16,6 +17,8 @@ const zhCN = {
     notConfigured: "未配置",
     loading: "加载中…",
     unknown: "未知",
+    showPassword: "显示密码",
+    hidePassword: "隐藏密码",
   },
   login: {
     title: "欢迎回来",
@@ -37,6 +40,7 @@ const zhCN = {
     overview: "总览",
     viewReports: "查看报告",
     manage: "管理",
+    mainNav: "主导航",
   },
   reports: {
     title: "情报报告",
@@ -152,7 +156,7 @@ const zhCN = {
     timezoneDesc: "报告时间与任务时间的显示时区。",
     reportLangSection: "报告语言",
     reportLangDesc: "新分析生成的报告使用的语言；报告页按界面语言显示对应版本。",
-    reportLangHint: "每次分析只生成一种语言；历史报告保持原语言。",
+    reportLangHint: "每次分析只生成一种语言；切换界面语言时此项同步更新，历史报告保持原语言。",
     reportLangZh: "中文",
     reportLangEn: "English",
     saveFailedNetwork: "网络连接失败，请稍后重试",

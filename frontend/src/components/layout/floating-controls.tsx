@@ -81,8 +81,11 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
     setPaletteOpen(false);
   };
 
+  /** 切换界面语言，并把报告语言同步为同语言（公开页未登录时 401，忽略） */
   const toggleLanguage = () => {
-    setLocale(locale === "en-US" ? "zh-CN" : "en-US");
+    const next = locale === "en-US" ? "zh-CN" : "en-US";
+    setLocale(next);
+    void api.saveReportLang(next === "en-US" ? "en" : "zh").catch(() => undefined);
   };
 
   const handleLogout = async () => {

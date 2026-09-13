@@ -18,9 +18,9 @@ export const SCHEMES: Array<{ id: Scheme; icon: "sun" | "moon" }> = [
 export const DEFAULT_THEME: ThemeId = "indigo";
 export const DEFAULT_SCHEME: Scheme = "light";
 
-/** 显示时区选项（固定 2 个：上海 + UTC） */
+/** 显示时区选项（固定 2 个：上海 + UTC）；label 用时区 ID，语言无关 */
 export const TIMEZONES: Array<{ label: string; value: string }> = [
-  { label: "上海 (UTC+8)", value: "Asia/Shanghai" },
+  { label: "Asia/Shanghai (UTC+8)", value: "Asia/Shanghai" },
   { label: "UTC (UTC+0)", value: "UTC" },
 ];
 

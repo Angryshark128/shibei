@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import type {
   AppConfig,
   MeResponse,
@@ -32,14 +33,14 @@ export class ApiError extends Error {
 /** 未登录（401）时抛出，由调用方统一跳登录 */
 export class AuthError extends Error {
   constructor() {
-    super("未登录");
+    super("unauthorized");
   }
 }
 
+/** 网络层失败：友好文案（跟随界面语言），禁止裸显 Failed to fetch（规范 08） */
 function friendlyMessage(e: unknown): string {
-  // 网络层失败：友好文案，禁止裸显 Failed to fetch（规范 08）
-  if (e instanceof TypeError) return "网络连接失败，请检查网络后重试";
-  return "服务暂时不可用，请稍后重试";
+  if (e instanceof TypeError) return i18n.t("errors.network");
+  return i18n.t("errors.server");
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

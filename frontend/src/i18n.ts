@@ -31,7 +31,15 @@ i18n.use(initReactI18next).init({
 function syncHtmlLang(locale: Locale): void {
   document.documentElement.lang = locale === "en-US" ? "en" : "zh-CN";
 }
+
+/** 浏览器 tab 标题跟随语言；changeLanguage 是异步的，故监听事件更新 */
+function syncTitle(): void {
+  document.title = i18n.t("common.pageTitle");
+}
+
 syncHtmlLang(DEFAULT_LOCALE);
+syncTitle();
+i18n.on("languageChanged", syncTitle);
 
 export function setLocale(locale: Locale): void {
   try {

@@ -2,6 +2,7 @@ const enUS = {
   common: {
     appName: "Shibei",
     appTagline: "Community Intelligence for Indie Developers",
+    pageTitle: "Shibei · Community Intelligence for Indie Developers",
     save: "Save",
     saving: "Saving…",
     cancel: "Cancel",
@@ -16,6 +17,8 @@ const enUS = {
     notConfigured: "Not configured",
     loading: "Loading…",
     unknown: "Unknown",
+    showPassword: "Show password",
+    hidePassword: "Hide password",
   },
   login: {
     title: "Welcome back",
@@ -37,6 +40,7 @@ const enUS = {
     overview: "Overview",
     viewReports: "View reports",
     manage: "Console",
+    mainNav: "Main navigation",
   },
   reports: {
     title: "Reports",
@@ -152,7 +156,7 @@ const enUS = {
     timezoneDesc: "Timezone used for report & task timestamps.",
     reportLangSection: "Report language",
     reportLangDesc: "Language used by newly generated reports; the Reports page shows the version matching your UI language.",
-    reportLangHint: "Each analysis run generates one language only; existing reports keep their original language.",
+    reportLangHint: "Each analysis run generates one language only; switching the UI language updates this too. Existing reports keep their original language.",
     reportLangZh: "Chinese",
     reportLangEn: "English",
     saveFailedNetwork: "Network error, please try again later",
