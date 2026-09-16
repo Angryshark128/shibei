@@ -622,9 +622,7 @@ def test_consolidate_prompt_accepts_non_empty_results():
     prompt = analyzer.build_consolidate_prompt(["条目 — [#1]"], "产品创意", incremental=True)
     assert "条目 — [#1]" in prompt
     assert "产品创意" in prompt
-    prompt_en = analyzer.build_consolidate_prompt(
-        ["item — [#1]"], "Product Ideas", incremental=False, lang="en"
-    )
+    prompt_en = analyzer.build_consolidate_prompt(["item — [#1]"], "Product Ideas", incremental=False, lang="en")
     assert "Product Ideas" in prompt_en
 
 
@@ -858,7 +856,11 @@ def test_build_report_with_eval_shows_buckets():
         "用户痛点": "- 普通痛点 — [来源](https://x/4)",
     }
     report = analyzer.build_report(
-        merged, 10, "src(x)", "2026-09-16", "zh",
+        merged,
+        10,
+        "src(x)",
+        "2026-09-16",
+        "zh",
         eval_cfg={"enabled": True, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
     )
     assert "### 保留清单 (1)" in report
@@ -888,7 +890,11 @@ def test_build_report_eval_disabled_via_cfg():
     """eval_cfg['enabled']=False → 等同旧行为（即便传了 eval_cfg）。"""
     merged = {"产品创意": "- [v=4,d=2,✓] 条目 — [来源](https://x/1)"}
     report = analyzer.build_report(
-        merged, 1, "x", "2026-09-16", "zh",
+        merged,
+        1,
+        "x",
+        "2026-09-16",
+        "zh",
         eval_cfg={"enabled": False, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
     )
     assert "### 保留清单" not in report
@@ -902,7 +908,11 @@ def test_build_report_eval_english_buckets():
         "User Pain Points": "- Plain pain — [来源](https://x/3)",
     }
     report = analyzer.build_report(
-        merged, 5, "src(x)", "2026-09-16", "en",
+        merged,
+        5,
+        "src(x)",
+        "2026-09-16",
+        "en",
         eval_cfg={"enabled": True, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
     )
     assert "### Keep (1)" in report

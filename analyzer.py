@@ -139,9 +139,7 @@ _EVAL_H3_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
 }
 
 
-def parse_eval_h3_sections(
-    text: str, lang: str
-) -> dict[str, list[str]] | None:
+def parse_eval_h3_sections(text: str, lang: str) -> dict[str, list[str]] | None:
     """识别 LLM 直接输出的三档 H3 分桶。返回 {bucket: [行]}；若没有 H3 标记则返回 None。
 
     每桶里只收集 `-` 开头行（条目）。H3 之后的非 `-` 行（描述/空行）跳过。
@@ -234,9 +232,7 @@ def categorize_items(
                 buckets["rejected"].append((v, d, r, rest))
             else:
                 score = _total_score(v, d)
-                (buckets["keep"] if score >= keep_threshold else buckets["watch"]).append(
-                    (v, d, r, rest)
-                )
+                (buckets["keep"] if score >= keep_threshold else buckets["watch"]).append((v, d, r, rest))
 
     def _sort_key(item: tuple[int, int, str, str]) -> int:
         v, d, r, _ = item
@@ -290,8 +286,7 @@ _EVAL_SECTION_LABELS: dict[str, dict[str, str]] = {
     },
     "en": {
         "summary_line": (
-            "This round {total} ideas: keep {keep} / watch {watch} / "
-            "rejected {rejected} / unscored {unscored}"
+            "This round {total} ideas: keep {keep} / watch {watch} / rejected {rejected} / unscored {unscored}"
         ),
         "criteria_line": "Threshold: total ≥ {threshold}; total = value × (6 - difficulty); red-line hit (✗) rejects.",
         "keep_section": "Keep ({n})",
@@ -672,7 +667,7 @@ def build_batch_prompt(
             "Rules:\n"
             "- Output a plain item list, no overall heading\n"
             "- Output only this category, nothing else\n"
-            "- If nothing matches the definition, output \"None\"\n"
+            '- If nothing matches the definition, output "None"\n'
             "- Do not limit the count; extract as much valuable info as possible\n"
             "- Mark each item's source post with ` — [#postID]` at the end; IDs must exactly match post labels above\n"
             "- Answer in English; even if the original text is in Chinese, output in English"
@@ -727,8 +722,10 @@ def build_multi_prompt(
     cfg = eval_cfg if isinstance(eval_cfg, dict) else _EVALUATION_DEFAULTS
     keep_threshold = int(cfg.get("keep_threshold", _EVALUATION_DEFAULTS["keep_threshold"]))
     watch_threshold = int(cfg.get("watch_threshold", _EVALUATION_DEFAULTS["watch_threshold"]))
-    eval_rule = _eval_rule_en(keep_threshold, watch_threshold) if lang == "en" else _eval_rule_zh(
-        keep_threshold, watch_threshold
+    eval_rule = (
+        _eval_rule_en(keep_threshold, watch_threshold)
+        if lang == "en"
+        else _eval_rule_zh(keep_threshold, watch_threshold)
     )
 
     def _section_lines(key: str, title: str, desc: str) -> str:
