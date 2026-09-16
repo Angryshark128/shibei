@@ -2,7 +2,7 @@ import { ArrowUp, ChevronRight, FileText, FileX, Info, Loader2, RefreshCw, Shell
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
-import i18n, { currentLocale } from "@/i18n";
+import i18n, { currentReportLang } from "@/i18n";
 import { EmptyState } from "@/components/ui/empty";
 import { ErrorBlock } from "@/components/ui/error";
 import { Button } from "@/components/ui/button";
@@ -67,13 +67,11 @@ export function ReportsView() {
   const { name } = useParams();
   const paramName = name ?? "";
 
-  /** 报告展示语言：跟随 UI 语言（zh-CN→zh / en-US→en），切换时同步刷新 */
-  const [preferredLang, setPreferredLang] = useState<"zh" | "en">(() =>
-    currentLocale() === "en-US" ? "en" : "zh",
-  );
+  /** 报告展示语言：跟随界面语言（zh-CN→zh / en-US→en），切换时同步刷新 */
+  const [preferredLang, setPreferredLang] = useState<"zh" | "en">(currentReportLang);
 
   useEffect(() => {
-    const handler = () => setPreferredLang(currentLocale() === "en-US" ? "en" : "zh");
+    const handler = () => setPreferredLang(currentReportLang());
     i18n.on("languageChanged", handler);
     return () => {
       i18n.off("languageChanged", handler);
@@ -93,6 +91,8 @@ export function ReportsView() {
   const [outlines, setOutlines] = useState<Record<string, TocSection[]>>({});
   const [expandedDates, setExpandedDates] = useState<Record<string, boolean>>({});
   const [expandedDocs, setExpandedDocs] = useState<Record<string, boolean>>({});
+  /** 正文请求序号：列表加载完成后会用正确语言重发，旧请求的响应必须丢弃（见 loadContent） */
+  const loadSeq = useRef(0);
   /** 跨日期跳转时，等内容渲染完成后滚动到目标锚点 */
   const pendingScroll = useRef<{ secId: string; docIndex: number } | null>(null);
 
@@ -144,6 +144,10 @@ export function ReportsView() {
 
   const loadContent = useCallback(
     async (n: string) => {
+      // 首次渲染时列表未到，pickMeta 只能退回界面语言；若该语言没有文件会得到 404，
+      // 列表到达后本函数会因 pickMeta 变化重发正确语言的请求。这里用序号丢弃旧响应，
+      // 否则慢到的 404 会覆盖新请求的成功结果，把已经拿到的报告判成「没有这份报告」。
+      const seq = ++loadSeq.current;
       setContentLoading(true);
       setContentError(false);
       setNotFound(false);
@@ -151,14 +155,16 @@ export function ReportsView() {
       try {
         const target = pickMeta(n);
         const d = await api.report(n, target?.lang ?? preferredLang);
+        if (seq !== loadSeq.current) return;
         setContent({ text: d.content, updated_at: d.updated_at });
         setOutlines((o) => ({ ...o, [n]: parseDocs(d.content) }));
         setLangFallback(d.language !== preferredLang);
       } catch (e) {
+        if (seq !== loadSeq.current) return;
         if (e instanceof ApiError && e.status === 404) setNotFound(true);
         else setContentError(true);
       } finally {
-        setContentLoading(false);
+        if (seq === loadSeq.current) setContentLoading(false);
       }
     },
     [pickMeta, preferredLang],
@@ -247,6 +253,14 @@ export function ReportsView() {
   };
 
   // ---------- 渲染 ----------
+
+  const loadingBlock = (
+    <div className="space-y-3 py-4" aria-busy="true">
+      <div className="h-4 w-1/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
+      <div className="h-4 w-2/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
+      <div className="h-4 w-full animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
+    </div>
+  );
 
   return (
     <>
@@ -400,23 +414,12 @@ export function ReportsView() {
               onRetry={() => void loadList()}
             />
           ) : contentLoading ? (
-            <div className="space-y-3 py-4" aria-busy="true">
-              <div className="h-4 w-1/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
-              <div className="h-4 w-2/3 animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
-              <div className="h-4 w-full animate-pulse rounded bg-surface-2 dark:bg-ink-900" />
-            </div>
+            loadingBlock
           ) : contentError ? (
             <ErrorBlock
               title={t("reports.loadFailedTitle")}
               desc={t("reports.loadFailedDesc")}
               onRetry={() => paramName && void loadContent(paramName)}
-            />
-          ) : notFound || !known ? (
-            <EmptyState
-              icon={FileX}
-              title={mode === "full" ? t("reports.emptyFull") : t("reports.notFound")}
-              desc={mode === "full" ? undefined : dates.length > 0 ? t("reports.emptyWrongDate") : undefined}
-              action={<Button onClick={goLatest}>{t("reports.latest")}</Button>}
             />
           ) : content ? (
             <>
@@ -433,6 +436,16 @@ export function ReportsView() {
               </Card>
               <p className="mt-4 text-xs text-ink-400 dark:text-surface-4">{t("reports.runHint")}</p>
             </>
+          ) : metaList == null ? (
+            // 列表未到：该日期是否存在还未知，先维持加载态，避免闪出「没有这份报告」
+            loadingBlock
+          ) : notFound || !known ? (
+            <EmptyState
+              icon={FileX}
+              title={mode === "full" ? t("reports.emptyFull") : t("reports.notFound")}
+              desc={mode === "full" ? undefined : dates.length > 0 ? t("reports.emptyWrongDate") : undefined}
+              action={<Button onClick={goLatest}>{t("reports.latest")}</Button>}
+            />
           ) : (
             <EmptyState
               icon={FileX}

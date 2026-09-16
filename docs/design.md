@@ -72,7 +72,7 @@
     "v2ex": {
       "enabled": true,
       "nodes": ["programmer", "python"],
-      "pages_per_node": 6,
+      "pages_per_node": 1,
       "request_delay": 1.2,
       "max_retries": 3
     }
@@ -88,6 +88,7 @@
 设计要点：
 
 - **按来源分节**：节点、页数、请求延迟、重试次数都属于来源自身特征，不同社区节点体系与限流策略不同。
+- `pages_per_node` 只在来源真的支持分页时有效：V2EX 的 `/api/topics/show.json` **忽略 `p` 参数**（实测 p=1/2/3/4 返回逐 id 相同的 10 条），其配置应保持 1；填大只是重复请求。
 - `request_delay` / `max_retries` 由爬虫按来源读取并使用，分析模块不读。
 - 新增来源只需在 `sources` 加一节 + 注册实现类。
 - 所有硬编码参数抽象到配置文件。
@@ -379,7 +380,119 @@ crawler.py 是**可选独立工具**（手动爬取 / 调试 / 列节点），�
 - 每条来源是**可点击链接** `[来源](原帖URL)`（代码还原，见 7.3）。
 - 落盘命名：全量 `data/analysis/analysis.md`，增量 `data/analysis/YYYY-MM-DD.md`（每天一份、同日多次运行刷新）；英文报告加 `.en` 后缀（`analysis.en.md` / `YYYY-MM-DD.en.md`）。Web 报告页按界面语言取对应文件，缺失该语言版本时回退显示另一份并提示。结束**打印绝对路径**。
 
-### 7.6 CLI（单一入口）
+### 7.6 评估打分（产品创意分类）
+
+为降低信息密度、避免淹没，报告对「产品创意」分类的条目按 idea-eval 框架做一次机器打分并分桶输出；「用户痛点」「潜在机会」不受影响。
+
+#### 评分维度
+
+每条创意在 LLM 输出阶段就附 `[v=X,d=Y,✓/✗]` 字段（位于 `— [#postID]` 之前）：
+
+- **v 价值** 1–5：真实需求强度 / 现有方案缺口 / 人群规模
+- **d 难度** 1–5：核心模块能否自研 / 成本 / 未知成本风险（越大越难）
+- **✓ / ✗ 红线**：✓ 通过（未命中法律·道德·合规·技术不可控四类）/ ✗ 命中即否决
+
+**总分 = 价值 × (6 - 难度)**（范围 1–25）。
+
+#### 前置过滤（省 token）
+
+LLM 在生成时即按总分阈值分桶；总分 < `watch_threshold` 的条目**直接不输出**，避免在 prompt、合并、分组各阶段反复搬运没用的描述文本，节省 ~25–30% token。
+
+#### 分桶规则
+
+| 红线 | 总分 | 分桶 | 报告默认输出 | LLM 在 prompt 阶段的处理 |
+|------|------|------|------|------|
+| ✓    | ≥ `keep_threshold`（16） | `保留清单` | 是 | 写入 `### 保留` |
+| ✓    | `[watch_threshold, keep_threshold)`（12–15） | `待观察` | 开关 `show_watch` | 写入 `### 待观察` |
+| ✓    | < `watch_threshold`（12） | —（过滤掉） | — | **不输出** |
+| ✗    | 任意 | `被否决` | 开关 `show_rejected` | 写入 `### 被否决` |
+| 无评分字段（缓存命中 / 旧条目 / LLM 未返回评分） | — | `未评分` | 随 `show_watch` | — |
+
+每桶内按总分从高到低排序。
+
+#### 报告输出协议（zh）
+
+```markdown
+## 产品创意
+
+> 本轮 46 条创意：保留 12 / 待观察 18 / 被否决 4 / 未评分 12
+> 评估阈值：总分 ≥ 16；总分 = 价值 × (6 - 难度)；红线命中（✗）即否决。
+
+### 保留清单 (12)
+
+- [v=4, d=2, ✓] PII 脱敏 SDK/代理 — [来源](...)
+- [v=4, d=2, ✓] 浏览器内 SQL 分析 — [来源](...)
+...
+
+### 待观察 (18)
+...
+### 被否决 (4)
+...
+### 未评分 (12)
+...
+```
+
+#### 解析路径（两路并行）
+
+`categorize_items()` 解析文本时优先按 H3 三档分桶（LLM 直接输出 `### 保留` / `### 待观察` / `### 被否决`），路径 A；没有 H3 时回退到基于评分字段的正则解析，路径 B（兼容旧 prompt / 缓存命中）。
+
+路径 A 下若 LLM 误放分桶（如把总分 9 放进 `### 保留`），会按 score 重新校正到正确分桶；总分 < `watch_threshold` 的条目按 H3 指定分桶保留（unscored 兜底）。
+
+#### 合并 / 分组 prompt 中的保留规则
+
+`build_merge_prompt` / `build_consolidate_prompt` / `build_organize_prompt` 全部明确告知 LLM：「若条目带有评分字段 `[v=X,d=Y,✓/✗]`，必须原样保留数字与符号，不得删除或改写」。合并与分组阶段不可丢分。
+
+#### 配置（`config.json`）
+
+```json
+{
+  "evaluation": {
+    "enabled": true,
+    "keep_threshold": 16,
+    "watch_threshold": 12,
+    "show_watch": true,
+    "show_rejected": true
+  }
+}
+```
+
+- `enabled`：`false` 时退化为旧行为（所有分类原样输出，分桶不启用），便于回滚
+- `keep_threshold`：默认 16（约等于「价值 4 + 难度 2」或「价值 3 + 难度 3」）
+- `watch_threshold`：默认 12；低于此分数的条目在 LLM 阶段即被过滤掉
+- `show_watch`：是否显示「待观察 / 未评分」分桶
+- `show_rejected`：是否显示「被否决」分桶
+
+缺失字段由 `load_evaluation()` 用 `_EVALUATION_DEFAULTS` 兜底，单测可独立跑、不依赖外部配置。
+
+#### 调用链
+
+`_main` 在调 `analyze` 时按 `eval_cfg["enabled"]` 决定是否传 `eval_enabled=True`：
+- `analyze` 把 `eval_enabled` 与 `eval_cfg` 透传给 `build_multi_prompt`（仅在「产品创意」section 附加评估规则，规则段含具体阈值数字）
+- `analyze` 的回退路径（多类输出解析失败时）按 `eval_enabled and key == "ideas"` 决定是否对单类 `build_batch_prompt` 加规则
+- `analyze` 返回的 `merged` 中「产品创意」分类仍按原流程 `restore_links` 还原 `[#ID]` → `[来源](url)`
+- `_main` 把 `eval_cfg` 透传给 `build_report`，由 `categorize_items`（优先 H3 路径）+ `_format_eval_*` 做分桶
+- `_main` 在 `analyze` 之前 `reset_token_usage()`，`analyze` 结束打印 `format_token_usage()` 摘要
+
+#### Token 消耗日志
+
+每次 `analyze()` 结束打印一行：
+
+```
+token: prompt=200 + completion=100 = total=300（3 次调用）
+```
+
+实现：`call_api` 从服务端响应里读 `usage.prompt_tokens` / `usage.completion_tokens` 累加到模块级 `_TOKEN_USAGE` 字典；服务端不返回 usage（旧协议 / 自定义网关）时不计入，摘要标注「服务端未返回 usage（N 次调用）」。
+
+辅助函数：`reset_token_usage()` / `token_usage_snapshot()` / `format_token_usage()`。单测用 `print_tokens=False` 关闭打印。
+
+#### 回归保护
+
+- `eval_cfg=None` 或 `eval_cfg["enabled"]=False` 时，`build_report` 输出与旧版本完全一致
+- 旧条目（无评分字段）落到 `unscored` 桶，原文本与来源标注保留
+- 评分字段解析失败（缓存命中旧格式）走 `unscored` 桶，不报错
+- token 日志关闭（`print_tokens=False`）或服务端不返回 usage 都不影响主流程
+
+### 7.7 CLI（单一入口）
 
 ```
 python3 analyzer.py                  # 默认：自动增量爬取 + 增量分析（数据为空时自动全量）

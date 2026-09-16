@@ -3,7 +3,8 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { FloatingControls } from "@/components/layout/floating-controls";
 import { TopBar } from "@/components/layout/topbar";
-import { api } from "@/lib/api";
+import { api, syncReportLang } from "@/lib/api";
+import { currentReportLang } from "@/i18n";
 import { AdminOverview } from "@/pages/admin-overview";
 import { HelpView } from "@/pages/help-view";
 import { LoginPage } from "@/pages/login-page";
@@ -45,6 +46,12 @@ function AdminRoute() {
       window.removeEventListener("shibei:unauthorized", handleUnauthorized);
     };
   }, [handleUnauthorized]);
+
+  // 报告语言跟随界面语言：登录后把本地语言同步到服务端（定时任务无浏览器上下文，沿用此值）
+  useEffect(() => {
+    if (status !== "authed") return;
+    void syncReportLang(currentReportLang());
+  }, [status]);
 
   if (status === "checking") {
     return (

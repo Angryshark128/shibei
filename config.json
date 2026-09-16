@@ -20,7 +20,7 @@
         "ollama",
         "imagine"
       ],
-      "pages_per_node": 6,
+      "pages_per_node": 1,
       "request_delay": 1.2,
       "max_retries": 1
     },

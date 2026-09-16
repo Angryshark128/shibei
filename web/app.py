@@ -515,7 +515,7 @@ def create_app() -> Flask:
 
     # ---------- 任务 ----------
 
-    def _run_env() -> dict[str, str]:
+    def _run_env(lang: str | None = None) -> dict[str, str]:
         env = dict(os.environ)
         llm = config.llm()
         if llm["base_url"]:
@@ -523,14 +523,15 @@ def create_app() -> Flask:
         if llm["model"]:
             env["ANALYZE_MODEL"] = llm["model"]
         env["ANALYZE_MAX_TOKENS"] = str(llm["max_tokens"])
-        env["ANALYZE_LANG"] = web_settings.load_report_lang()  # 报告/日志语言：设置页「报告语言」
+        # 报告/日志语言：调用方传入（界面语言）优先，否则用服务端记住的语言（定时任务）
+        env["ANALYZE_LANG"] = lang or web_settings.load_report_lang()
         if secrets_store.llm_api_key:
             env["OPENAI_API_KEY"] = secrets_store.llm_api_key
         return env
 
-    def _start_task(mode: str) -> dict[str, Any]:
+    def _start_task(mode: str, lang: str | None = None) -> dict[str, Any]:
         """组装环境并启动任务；未配 Key 抛 ApiKeyMissingError，运行中抛 TaskRunningError。"""
-        env = _run_env()
+        env = _run_env(lang)
         if not env.get("OPENAI_API_KEY"):
             raise ApiKeyMissingError("尚未配置 LLM API Key")
         return tasks.start(mode, env)
@@ -543,8 +544,14 @@ def create_app() -> Flask:
         mode = data.get("mode", "today")
         if mode not in ("today", "full"):
             return jsonify({"error": "bad_mode", "message": "mode 需为 today 或 full"}), 400
+        # lang 可选：调用方界面语言；非法值拒绝，合法值记住（定时任务无浏览器上下文，沿用它）
+        lang = str(data.get("lang", "")).strip()
+        if lang and lang not in web_settings.REPORT_LANGS:
+            return jsonify({"error": "bad_lang", "message": "lang 需为 zh 或 en"}), 400
+        if lang:
+            web_settings.save_report_lang(lang)
         try:
-            task = _start_task(mode)
+            task = _start_task(mode, lang or None)
         except ApiKeyMissingError:
             return jsonify({"error": "no_api_key", "message": "尚未配置 LLM API Key，请先到「设置」完成 AI 配置"}), 400
         except TaskRunningError as e:
@@ -653,9 +660,10 @@ def create_app() -> Flask:
         cfg = web_settings.load_webhook()
         if not str(cfg.get("url", "")).strip():
             return jsonify({"error": "no_url", "message": "请先填写 Webhook 地址"}), 400
-        sent = send_test()
+        sent, detail = send_test()
         if not sent:
-            return jsonify({"error": "send_failed", "message": "发送失败，请检查地址与网络"}), 502
+            # detail 为接收端的真实响应（HTTP 状态 / 异常），供界面直接显示
+            return jsonify({"error": "send_failed", "message": "发送失败，请检查地址与网络", "detail": detail}), 502
         return jsonify({"ok": True})
 
     # ---------- 报告语言 ----------

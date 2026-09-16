@@ -6,7 +6,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Field, Input, PasswordInput } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/toast";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import type { WebhookConfig } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -71,8 +71,10 @@ export function WebhookCard() {
     try {
       await api.testWebhook();
       toast.push("success", t("settings.webhookTestOk"));
-    } catch {
-      toast.push("error", t("settings.webhookTestFail"));
+    } catch (e) {
+      // 服务端带回接收端的真实响应（如 HTTP 401 Unauthorized · bad signature），比通用文案更能定位问题
+      const detail = e instanceof ApiError ? e.detail : "";
+      toast.push("error", detail ? `${t("settings.webhookTestFail")} (${detail})` : t("settings.webhookTestFail"));
     } finally {
       setTesting(false);
     }

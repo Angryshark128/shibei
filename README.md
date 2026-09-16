@@ -181,7 +181,7 @@ cd frontend && npm install && npm run dev                             # :5173
     "v2ex": {
       "enabled": true,
       "nodes": ["programmer", "python"],
-      "pages_per_node": 6,
+      "pages_per_node": 1,
       "request_delay": 1.2,
       "max_retries": 3
     }
@@ -197,7 +197,7 @@ cd frontend && npm install && npm run dev                             # :5173
 | 配置项 | 说明 |
 |---|---|
 | `sources.{来源}.nodes` | 要爬的节点列表（V2EX 节点见 `uv run python crawler.py list`） |
-| `sources.{来源}.pages_per_node` | 每个节点往后翻几页 |
+| `sources.{来源}.pages_per_node` | 每个节点往后翻几页（**V2EX 的 API 忽略分页参数，填 1 即可**——多填只是重复请求同一批帖子） |
 | `sources.{来源}.request_delay` | 请求间隔（秒），控制限流 |
 | `sources.{来源}.max_retries` | 请求失败重试次数 |
 | `llm.base_url` | OpenAI 兼容 API 地址 |

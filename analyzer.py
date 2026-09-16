@@ -12,6 +12,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import locale
 import os
 import re
 import sys
@@ -75,22 +76,285 @@ def _categories(lang: str) -> list[tuple[str, str, str]]:
     return CATEGORIES_BY_LANG.get(lang, CATEGORIES_BY_LANG["zh"])
 
 
+# 评估打分：每条产品创意附 [v=价值,d=难度,✓/✗]，报告按总分（价值×(6-难度)）分桶输出。
+# 配置在 config.json 的 evaluation 段；本常量定义默认值，便于回滚到旧行为。
+#
+# 总分阈值三层（默认）：
+#   score >= keep_threshold       → 保留分桶（keep）
+#   watch_threshold <= score < keep_threshold → 待观察分桶（watch）
+#   score < watch_threshold       → 不输出（前置过滤，省 token）
+_EVALUATION_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "keep_threshold": 16,  # 总分 ≥ 16 进「保留」（约等于"价值 4 + 难度 2"）
+    "watch_threshold": 12,  # 总分 ≥ 12 但 < keep_threshold 进「待观察」
+    "show_watch": True,
+    "show_rejected": True,
+}
+
+# 创意条目评分字段：v=价值(1-5)、d=难度(1-5)、✓ 红线 pass / ✗ 红线 concern
+ITEM_SCORE_RE = re.compile(r"\[v=(\d),d=(\d),([✓✗])\]")
+
+
+def load_evaluation(config: dict[str, Any]) -> dict[str, Any]:
+    """从 config 读 evaluation 段，缺失或字段不全时用默认值兜底。"""
+    out = dict(_EVALUATION_DEFAULTS)
+    user_cfg = config.get("evaluation") if isinstance(config, dict) else None
+    if isinstance(user_cfg, dict):
+        out.update(user_cfg)
+    return out
+
+
+def parse_item_score(line: str) -> tuple[int, int, str, str]:
+    """从条目行提取评分字段。返回 (价值, 难度, 红线符号, 去除评分字段后的原文)。
+
+    无评分字段时返回 (0, 0, "?", 原行) — 调用方按「未评估」处理。
+    """
+    m = ITEM_SCORE_RE.search(line)
+    if not m:
+        return 0, 0, "?", line
+    v, d, r = int(m.group(1)), int(m.group(2)), m.group(3)
+    rest = (line[: m.start()] + line[m.end() :]).strip()
+    return v, d, r, rest
+
+
+def _total_score(value: int, difficulty: int) -> int:
+    """总分 = 价值 × (6 - 难度)，范围 1–25。"""
+    return value * (6 - difficulty)
+
+
+# 创意分类 H3 标题 → 内部分桶 key 的映射（zh / en）。LLM 在 prompt 指引下会输出
+# `### 保留 (...)` / `### 待观察 (...)` / `### 被否决` 等 H3；这里用宽松匹配，
+# 兼容「(12)」/「(16+)」/「12-15」/全角括号「（16+）」等阈值说明的格式差异。
+_EVAL_H3_PATTERNS: dict[str, list[tuple[str, re.Pattern[str]]]] = {
+    "zh": [
+        ("keep", re.compile(r"^###\s*(?:保留|高价值|高分)(?:\s*[（(][^）)]*[）)])?\s*$")),
+        ("watch", re.compile(r"^###\s*(?:待观察|中等|中分)(?:\s*[（(][^）)]*[）)])?\s*$")),
+        ("rejected", re.compile(r"^###\s*(?:被否决|红线|不通过)(?:\s*[（(][^）)]*[）)])?\s*$")),
+    ],
+    "en": [
+        ("keep", re.compile(r"^###\s*(?:Keep|High)(?:\s*\([^)]*\))?\s*$", re.I)),
+        ("watch", re.compile(r"^###\s*(?:Watch|Medium)(?:\s*\([^)]*\))?\s*$", re.I)),
+        ("rejected", re.compile(r"^###\s*(?:Rejected|Red-?line)(?:\s*\([^)]*\))?\s*$", re.I)),
+    ],
+}
+
+
+def parse_eval_h3_sections(
+    text: str, lang: str
+) -> dict[str, list[str]] | None:
+    """识别 LLM 直接输出的三档 H3 分桶。返回 {bucket: [行]}；若没有 H3 标记则返回 None。
+
+    每桶里只收集 `-` 开头行（条目）。H3 之后的非 `-` 行（描述/空行）跳过。
+    返回 None 时调用方应回退到基于评分字段的解析。
+    """
+    patterns = _EVAL_H3_PATTERNS.get(lang, _EVAL_H3_PATTERNS["zh"])
+    sections: dict[str, list[str]] = {"keep": [], "watch": [], "rejected": []}
+    current: str | None = None
+    matched_any = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("###"):
+            bucket: str | None = None
+            for key, pat in patterns:
+                if pat.match(line):
+                    bucket = key
+                    matched_any = True
+                    break
+            current = bucket
+            continue
+        if current is None:
+            continue
+        if not line or not line.startswith("-"):
+            continue
+        sections[current].append(line)
+    if not matched_any:
+        return None
+    return sections
+
+
+def categorize_items(
+    text: str, eval_cfg: dict[str, Any], lang: str = "zh"
+) -> dict[str, list[tuple[int, int, str, str]]]:
+    """把「产品创意」section 的条目文本按红线 + 总分切成四桶，并按总分从高到低排序。
+
+    每桶元素是 (v, d, redline, line_text)：
+    - keep：红线 pass + 总分 >= keep_threshold
+    - watch：红线 pass + 总分 < keep_threshold
+    - rejected：红线 concern
+    - unscored：无评分字段（缓存命中/旧条目/LLM 未返回评分），按原样保留
+
+    解析策略：优先按 LLM 输出的三档 H3（`### 保留` / `### 待观察` / `### 被否决`）分桶；
+    没有 H3 时回退到基于评分字段的正则解析。
+    """
+    keep_threshold = int(eval_cfg.get("keep_threshold", _EVALUATION_DEFAULTS["keep_threshold"]))
+    buckets: dict[str, list[tuple[int, int, str, str]]] = {
+        "keep": [],
+        "watch": [],
+        "rejected": [],
+        "unscored": [],
+    }
+
+    h3 = parse_eval_h3_sections(text, lang)
+    if h3 is not None:
+        # 路径 A：LLM 直接按 H3 分桶（前置过滤模式）
+        for bucket_key, lines in h3.items():
+            for line in lines:
+                # 链接还原可能让 `— [来源]` 出现在已还原文本里
+                if "— [#" not in line and "— [来源]" not in line:
+                    continue
+                v, d, r, rest = parse_item_score(line)
+                # H3 模式下分桶归属已由 H3 决定，但 score 仍按规则重新计算（防 LLM 误标）
+                if r == "✗":
+                    buckets["rejected"].append((v, d, r, rest))
+                elif r == "?":
+                    # H3 模式下出现无评分字段 → 落到 H3 指定分桶，unscored 兜底
+                    buckets[bucket_key].append((0, 0, r, rest))
+                else:
+                    score = _total_score(v, d)
+                    if bucket_key == "keep" and score < keep_threshold:
+                        # LLM 误放进保留 → 移到 watch
+                        buckets["watch"].append((v, d, r, rest))
+                    elif bucket_key == "watch" and score >= keep_threshold:
+                        # LLM 误放进待观察 → 移到 keep
+                        buckets["keep"].append((v, d, r, rest))
+                    else:
+                        buckets[bucket_key].append((v, d, r, rest))
+    else:
+        # 路径 B：回退到基于评分字段的正则解析（兼容旧 prompt / 缓存）
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or not line.startswith("-"):
+                continue
+            if "— [#" not in line and "— [来源]" not in line:
+                continue
+            v, d, r, rest = parse_item_score(line)
+            if r == "?":
+                buckets["unscored"].append((0, 0, "?", rest))
+            elif r == "✗":
+                buckets["rejected"].append((v, d, r, rest))
+            else:
+                score = _total_score(v, d)
+                (buckets["keep"] if score >= keep_threshold else buckets["watch"]).append(
+                    (v, d, r, rest)
+                )
+
+    def _sort_key(item: tuple[int, int, str, str]) -> int:
+        v, d, r, _ = item
+        return _total_score(v, d) if r != "?" else -1
+
+    for key in buckets:
+        buckets[key].sort(key=_sort_key, reverse=True)
+    return buckets
+
+
+def _format_eval_buckets(
+    buckets: dict[str, list[tuple[int, int, str, str]]], eval_cfg: dict[str, Any], lang: str
+) -> str:
+    """把分桶结果格式化为报告子节（按 keep → watch → rejected → unscored 顺序）。"""
+    labels = _EVAL_SECTION_LABELS.get(lang, _EVAL_SECTION_LABELS["zh"])
+    sections: list[str] = []
+    order = [
+        ("keep", "keep_section"),
+        ("watch", "watch_section"),
+        ("rejected", "rejected_section"),
+        ("unscored", "unscored_section"),
+    ]
+    for bucket_key, label_key in order:
+        items = buckets.get(bucket_key, [])
+        if not items:
+            continue
+        # rejected/unscored 默认按配置开关隐藏
+        if bucket_key == "watch" and not eval_cfg.get("show_watch", True):
+            continue
+        if bucket_key == "rejected" and not eval_cfg.get("show_rejected", True):
+            continue
+        if bucket_key == "unscored" and not eval_cfg.get("show_watch", True):
+            # 未评分条目与待观察共用 show_watch 开关：避免默认输出过多
+            continue
+        heading = labels[label_key].format(n=len(items))
+        sections.append(f"### {heading}\n")
+        for _v, _d, _r, rest in items:
+            sections.append(f"{rest}\n")
+        sections.append("")
+    return "\n".join(sections).rstrip()
+
+
+_EVAL_SECTION_LABELS: dict[str, dict[str, str]] = {
+    "zh": {
+        "summary_line": "本轮 {total} 条创意：保留 {keep} / 待观察 {watch} / 被否决 {rejected} / 未评分 {unscored}",
+        "criteria_line": "评估阈值：总分 ≥ {threshold}；总分 = 价值 × (6 - 难度)；红线命中（✗）即否决。",
+        "keep_section": "保留清单 ({n})",
+        "watch_section": "待观察 ({n})",
+        "rejected_section": "被否决 ({n})",
+        "unscored_section": "未评分 ({n})",
+    },
+    "en": {
+        "summary_line": (
+            "This round {total} ideas: keep {keep} / watch {watch} / "
+            "rejected {rejected} / unscored {unscored}"
+        ),
+        "criteria_line": "Threshold: total ≥ {threshold}; total = value × (6 - difficulty); red-line hit (✗) rejects.",
+        "keep_section": "Keep ({n})",
+        "watch_section": "Watch ({n})",
+        "rejected_section": "Rejected ({n})",
+        "unscored_section": "Unscored ({n})",
+    },
+}
+
+
+def _format_eval_summary(
+    buckets: dict[str, list[tuple[int, int, str, str]]], eval_cfg: dict[str, Any], lang: str
+) -> str:
+    """评估汇总行（引用块形式）+ 阈值说明。"""
+    labels = _EVAL_SECTION_LABELS.get(lang, _EVAL_SECTION_LABELS["zh"])
+    summary = labels["summary_line"].format(
+        total=sum(len(v) for v in buckets.values()),
+        keep=len(buckets["keep"]),
+        watch=len(buckets["watch"]),
+        rejected=len(buckets["rejected"]),
+        unscored=len(buckets["unscored"]),
+    )
+    criteria = labels["criteria_line"].format(threshold=eval_cfg.get("keep_threshold", 16))
+    return f"> {summary}\n> {criteria}"
+
+
+_EVAL_CATEGORY_KEY = "ideas"  # 评估打分仅作用于「产品创意 / Product Ideas」分类
+
+
 # 来源链接锚点：最终输出时由代码还原为可点击链接（不经过 LLM）
 LINK_RE = re.compile(r"\[#([^\]]+)\]")
 
 # LLM 配置（main 里从 config/环境变量解析后填充），call_api 读取
 _LLM: dict[str, str] = {"base_url": "", "model": "", "max_tokens": "4096"}
 
-# 分析/界面语言（main 里从 --lang / ANALYZE_LANG 解析后填充），默认中文
+# 分析/界面语言（main 里从 --lang / ANALYZE_LANG / 系统语言解析后填充），默认中文
 _LANG: str = "zh"
 
 
+def system_lang() -> str:
+    """系统语言：LANG / LC_ALL / LC_MESSAGES 或 locale 设置；en* → en，其余 → zh。"""
+    candidates = [os.environ.get(key, "") for key in ("LC_ALL", "LC_MESSAGES", "LANG")]
+    try:
+        candidates.append(locale.getlocale()[0] or "")
+    except (ValueError, TypeError):
+        pass
+    for candidate in candidates:
+        tag = str(candidate).strip().lower()
+        if not tag or tag in ("c", "posix"):
+            continue
+        if tag.startswith("en"):
+            return "en"
+        if tag.startswith("zh"):
+            return "zh"
+    return "zh"
+
+
 def resolve_lang(lang: str | None) -> str:
-    """解析分析语言：--lang 参数 > ANALYZE_LANG 环境变量 > zh。"""
+    """解析分析语言：--lang 参数 > ANALYZE_LANG 环境变量 > 系统语言 > zh。"""
     for candidate in (lang, os.environ.get("ANALYZE_LANG", "")):
         if candidate is not None and str(candidate).strip() in LANGS:
             return str(candidate).strip()
-    return "zh"
+    return system_lang()
 
 
 # CLI / 界面文案（按分析语言输出，让任务日志随语言切换）
@@ -245,6 +509,10 @@ def call_api(prompt: str, *, timeout: int = 120, retries: int = 3, max_tokens: i
     """调用 OpenAI 协议 chat/completions，返回 assistant 文本。失败时 raise（附服务端原因）。
 
     max_tokens 缺省用配置值；一次输出多类的调用需要更大的上限时显式传入。
+
+    Token 消耗：尝试从服务端响应里读 `usage.prompt_tokens` / `usage.completion_tokens`，
+    累加到模块级 `_TOKEN_USAGE` 字典（按 prompt / completion / total 拆分）。
+    服务端不返回 usage（旧协议 / 网关剥掉）时不报错，仅不计入；打印的 token 摘要会标注。
     """
     body = json.dumps(
         {
@@ -267,7 +535,17 @@ def call_api(prompt: str, *, timeout: int = 120, retries: int = 3, max_tokens: i
     for attempt in range(retries + 1):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+                raw = resp.read().decode("utf-8")
+                data = json.loads(raw)
+                # 服务端可能不返回 usage（部分网关、自定义代理）；失败/缺失就跳过
+                usage = data.get("usage") if isinstance(data, dict) else None
+                if isinstance(usage, dict):
+                    p = int(usage.get("prompt_tokens") or 0)
+                    c = int(usage.get("completion_tokens") or 0)
+                    _TOKEN_USAGE["prompt"] += p
+                    _TOKEN_USAGE["completion"] += c
+                    _TOKEN_USAGE["total"] += p + c
+                    _TOKEN_USAGE["calls"] += 1
                 return data["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as e:
             detail = _http_error_detail(e)
@@ -280,6 +558,37 @@ def call_api(prompt: str, *, timeout: int = 120, retries: int = 3, max_tokens: i
         if attempt < retries:
             time.sleep(min(5 * (2**attempt), MAX_BACKOFF))
     raise RuntimeError(f"LLM API 调用失败（重试 {retries} 次后）：{last_error}")
+
+
+# 模块级 token 累计；call_api 写入，print_token_usage 打印并清零。
+_TOKEN_USAGE: dict[str, int] = {"prompt": 0, "completion": 0, "total": 0, "calls": 0}
+
+
+def reset_token_usage() -> None:
+    """重置 token 累计（单测/手动控制边界）。"""
+    _TOKEN_USAGE["prompt"] = 0
+    _TOKEN_USAGE["completion"] = 0
+    _TOKEN_USAGE["total"] = 0
+    _TOKEN_USAGE["calls"] = 0
+
+
+def token_usage_snapshot() -> dict[str, int]:
+    """返回当前累计的 token 用量快照（不影响累计）。"""
+    return dict(_TOKEN_USAGE)
+
+
+def format_token_usage() -> str:
+    """格式化 token 用量摘要：prompt + completion + total + 调用次数。
+
+    若累计 calls==0（服务端未返回 usage），摘要里标注"（服务端未返回 usage）"。
+    """
+    snap = _TOKEN_USAGE
+    if snap["calls"] == 0:
+        return f"token: 服务端未返回 usage（{snap['calls']} 次调用）"
+    return (
+        f"token: prompt={snap['prompt']} + completion={snap['completion']} "
+        f"= total={snap['total']}（{snap['calls']} 次调用）"
+    )
 
 
 # ---------- Prompt ----------
@@ -303,45 +612,139 @@ def format_batch(batch: list[Post]) -> str:
     return "\n---\n".join(format_post(p) for p in batch)
 
 
-def build_batch_prompt(batch_text: str, idx: int, total: int, title: str, desc: str, lang: str = "zh") -> str:
-    """单类批次 prompt；类别标题/说明由调用方按分析语言传入。"""
+def _eval_rule_zh(keep_threshold: int, watch_threshold: int) -> str:
+    """中文评估打分 + 前置过滤规则段（注入 prompt）。
+
+    LLM 在生成时即按总分（v × (6-d)）分桶：
+    - ≥ keep：输出在 ### 保留
+    - watch..keep-1：输出在 ### 待观察
+    - < watch：直接不输出（前置过滤，省 token）
+    - 红线 ✗：输出在 ### 被否决
+    """
+    return (
+        f"- 先给每条打分 `[v=X,d=Y,✓/✗]`：v 价值（1–5）、d 难度（1–5）、"
+        f"✓ 红线 pass / ✗ 命中法律·道德·合规·技术不可控红线\n"
+        f"- 评分必须给具体数字（如 `[v=4,d=2,✓]`），不得用文字代替；评分字段位置在描述末尾、`[#帖子ID]` 之前\n"
+        f"- 按总分 v×(6-d) 分桶输出（每组用三级标题分组，不要总标题外的其他标题）：\n"
+        f"  · 总分 ≥ {keep_threshold} 的输出在 `### 保留 ({keep_threshold}+)`\n"
+        f"  · 总分在 [{watch_threshold}, {keep_threshold}) 内的输出在 `### 待观察`\n"
+        f"  · 红线 ✗ 的输出在 `### 被否决`\n"
+        f"  · 总分 < {watch_threshold} 的直接不输出（前置过滤，省 token）\n"
+        f"- 组内条目按总分从高到低排列"
+    )
+
+
+def _eval_rule_en(keep_threshold: int, watch_threshold: int) -> str:
+    """英文评估打分 + 前置过滤规则段（注入 prompt）。"""
+    return (
+        f"- Score each item `[v=X,d=Y,✓/✗]`: v=value (1–5), d=difficulty (1–5), "
+        f"✓ passes red-line / ✗ hits law·ethics·compliance·technical-uncontrollable\n"
+        f"- Use literal digits (e.g. `[v=4,d=2,✓]`); place the tag before ` — [#postID]`\n"
+        f"- Bucket by total = v×(6-d) (use `### ` H3 headings; no other headings):\n"
+        f"  · Total ≥ {keep_threshold} → `### Keep ({keep_threshold}+)`\n"
+        f"  · Total ≥ {watch_threshold} and < {keep_threshold} → `### Watch ({watch_threshold}-{keep_threshold - 1})`\n"
+        f"  · Red-line ✗ → `### Rejected`\n"
+        f"  · Total < {watch_threshold} → omit entirely (front-end filter, save tokens)\n"
+        f"- Within each bucket, sort by total descending"
+    )
+
+
+def build_batch_prompt(
+    batch_text: str,
+    idx: int,
+    total: int,
+    title: str,
+    desc: str,
+    lang: str = "zh",
+    eval_enabled: bool = False,
+    eval_cfg: dict[str, Any] | None = None,
+) -> str:
+    """单类批次 prompt；类别标题/说明由调用方按分析语言传入。
+
+    eval_enabled=True 时在末尾追加评估打分 + 前置过滤指令（仅「产品创意 / Product Ideas」分类启用）。
+    eval_cfg 缺省时用 _EVALUATION_DEFAULTS 的阈值（keep=16, watch=12）。
+    """
+    cfg = eval_cfg if isinstance(eval_cfg, dict) else _EVALUATION_DEFAULTS
+    keep_threshold = int(cfg.get("keep_threshold", _EVALUATION_DEFAULTS["keep_threshold"]))
+    watch_threshold = int(cfg.get("watch_threshold", _EVALUATION_DEFAULTS["watch_threshold"]))
     if lang == "en":
+        rules = (
+            "Rules:\n"
+            "- Output a plain item list, no overall heading\n"
+            "- Output only this category, nothing else\n"
+            "- If nothing matches the definition, output \"None\"\n"
+            "- Do not limit the count; extract as much valuable info as possible\n"
+            "- Mark each item's source post with ` — [#postID]` at the end; IDs must exactly match post labels above\n"
+            "- Answer in English; even if the original text is in Chinese, output in English"
+        )
+        if eval_enabled:
+            rules += "\n" + _eval_rule_en(keep_threshold, watch_threshold)
         return f"""Analyze the community posts below; extract only "{title}" items.
 
 Definition: {desc}
 
-Rules:
-- Output a plain item list, no overall heading
-- Output only this category, nothing else
-- If nothing matches the definition, output "None"
-- Do not limit the count; extract as much valuable info as possible
-- Mark each item's source post with ` — [#postID]` at the end; IDs must exactly match the post labels above
-- Answer in English; even if the original text is in Chinese, output in English
+{rules}
 
 ---(batch {idx + 1}/{total})
 
 {batch_text}"""
+    rules = (
+        "规则：\n"
+        "- 直接输出条目列表，不加总标题\n"
+        "- 只输出这一类，不要输出其他类别\n"
+        "- 如果没有符合定义的信息，输出「无」\n"
+        "- 不要限制条数，尽可能多地提炼有价值的信息\n"
+        "- 每条在描述末尾用 ` — [#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写\n"
+        "- 一律用中文回答；即使原文是英文，也要用中文输出"
+    )
+    if eval_enabled:
+        rules += "\n" + _eval_rule_zh(keep_threshold, watch_threshold)
     return f"""分析以下社区帖子，只提炼「{title}」类信息。
 
 定义：{desc}
 
-规则：
-- 直接输出条目列表，不加总标题
-- 只输出这一类，不要输出其他类别
-- 如果没有符合定义的信息，输出「无」
-- 不要限制条数，尽可能多地提炼有价值的信息
-- 每条在描述末尾用 ` — [#帖子ID]` 标注来源帖子，ID 必须与上文的帖子标注完全一致，不得改写
-- 一律用中文回答；即使原文是英文，也要用中文输出
+{rules}
 
 ---（第 {idx + 1}/{total} 批）
 
 {batch_text}"""
 
 
-def build_multi_prompt(batch_text: str, idx: int, total: int, lang: str = "zh") -> str:
-    """一次调用提炼全部类别：帖子正文只发一次，避免按类重复输入（省 token）。"""
+def build_multi_prompt(
+    batch_text: str,
+    idx: int,
+    total: int,
+    lang: str = "zh",
+    eval_enabled: bool = False,
+    eval_cfg: dict[str, Any] | None = None,
+) -> str:
+    """一次调用提炼全部类别：帖子正文只发一次，避免按类重复输入（省 token）。
+
+    eval_enabled=True 时，仅在「产品创意 / Product Ideas」分类的 section 追加评估打分 + 前置过滤规则；
+    「用户痛点」「潜在机会」不受影响（不在 idea-eval 范围）。
+    eval_cfg 缺省时用 _EVALUATION_DEFAULTS 的阈值。
+    """
+    cfg = eval_cfg if isinstance(eval_cfg, dict) else _EVALUATION_DEFAULTS
+    keep_threshold = int(cfg.get("keep_threshold", _EVALUATION_DEFAULTS["keep_threshold"]))
+    watch_threshold = int(cfg.get("watch_threshold", _EVALUATION_DEFAULTS["watch_threshold"]))
+    eval_rule = _eval_rule_en(keep_threshold, watch_threshold) if lang == "en" else _eval_rule_zh(
+        keep_threshold, watch_threshold
+    )
+
+    def _section_lines(key: str, title: str, desc: str) -> str:
+        if lang == "en":
+            base = f"## {title}\n(Definition: {desc})"
+        else:
+            base = f"## {title}\n（定义：{desc}）"
+        if eval_enabled and key == _EVAL_CATEGORY_KEY:
+            if lang == "en":
+                base += "\n(Score rule: " + eval_rule + ")"
+            else:
+                base += "\n（评估规则：" + eval_rule + "）"
+        return base
+
+    sections = "\n".join(_section_lines(key, title, desc) for key, title, desc in _categories(lang))
     if lang == "en":
-        sections = "\n".join(f"## {title}\n(Definition: {desc})" for _, title, desc in _categories(lang))
         return f"""Analyze the posts below; extract info per listed category (send the batch once, output in one go).
 
 {sections}
@@ -356,7 +759,6 @@ Rules:
 ---(batch {idx + 1}/{total})
 
 {batch_text}"""
-    sections = "\n".join(f"## {title}\n（定义：{desc}）" for _, title, desc in _categories(lang))
     return f"""分析以下社区帖子，按下面每个类别分别提炼信息（同一批帖子只发一次，请一次全部输出）。
 
 {sections}
@@ -399,7 +801,17 @@ def parse_multi(raw: str, lang: str = "zh") -> dict[str, str]:
 
 
 def build_merge_prompt(results: list[str], incremental: bool, lang: str = "zh") -> str:
-    """合并去重 prompt：把多批结果合并成条目列表。"""
+    """合并去重 prompt：把多批结果合并成条目列表。
+
+    空输入守卫：上层 consolidate/merge_results 已先过滤，但任何绕过入口直接调用本函数
+    的代码都会发出空 body prompt 给 LLM（LLM 仍可能回 "未提供可合并的多批次分析结果…"），回
+    复会穿透到报告层。直接拒绝空列表，让上层走 build_report 的 empty_text 分支。
+
+    评分字段保留：若条目带 `[v=X,d=Y,✓/✗]` 评分字段（仅「产品创意」分类会出现），
+    合并去重时必须原样保留，不得删除或改写分数与符号。
+    """
+    if not results:
+        raise ValueError("build_merge_prompt 需要至少 1 个非空批次结果")
     if lang == "en":
         note = " (this is today's incremental analysis)" if incremental else ""
         body = "\n\n---\n\n".join(results)
@@ -410,6 +822,7 @@ Rules:
 - Drop duplicate items, keep the most representative description
 - Do not limit the count; keep all valuable info
 - Keep the trailing ` — [#postID]` source marker on every item; do not remove or alter it
+- If an item carries a score tag `[v=X,d=Y,✓/✗]`, keep the tag verbatim (digits and symbol); do not edit or drop it
 - Sort by value from high to low
 - Answer in English; even if the original text is in Chinese, output in English
 
@@ -423,6 +836,7 @@ Rules:
 - 去除重复条目，保留最有代表性的描述
 - 不要限制条数，尽可能保留所有有价值的信息
 - 每条保留描述末尾的 ` — [#帖子ID]` 来源标注，不得删除或改写
+- 若条目带有评分字段 `[v=X,d=Y,✓/✗]`（仅「产品创意」分类），必须原样保留数字与符号，不得删除或改写
 - 按价值从高到低排列
 - 一律用中文回答；即使原文是英文，也要用中文输出
 
@@ -430,12 +844,17 @@ Rules:
 
 
 def build_organize_prompt(text: str, category_title: str, lang: str = "zh") -> str:
-    """分组整理 prompt：只做「子主题分组」，不增删改条目。"""
+    """分组整理 prompt：只做「子主题分组」，不增删改条目。
+
+    评分字段保留：若条目带 `[v=X,d=Y,✓/✗]` 评分字段（仅「产品创意」分类），
+    分组整理时必须原样保留，不得删除或改写。
+    """
     if lang == "en":
         return f"""Below is the item list for "{category_title}". Group it only; do not change any item.
 
 Rules:
 - Do not add, remove or change the meaning of any item; keep the trailing ` — [#postID]` marker on each item
+- If an item carries a score tag `[v=X,d=Y,✓/✗]`, keep the tag verbatim; do not edit or drop it
 - Group similar items: start each group with `### Subtopic` (<=10 words), then list its items
 - At most 8 groups; if items are too scattered to group sensibly, output the whole list as-is (no ### lines)
 - Sort groups (and items within groups) by value from high to low
@@ -448,6 +867,7 @@ Rules:
 
 规则：
 - 不新增、不删除、不改写任何条目的含义；每条保留末尾的 ` — [#帖子ID]` 来源标注
+- 若条目带有评分字段 `[v=X,d=Y,✓/✗]`（仅「产品创意」分类），必须原样保留数字与符号，不得删除或改写
 - 把主题相近的条目归为一组：每组先用一行 `### 子主题名` 开头（子主题名不超过 10 字），随后列出该组全部条目
 - 组数最多 8 组；条目过于零散、无法合理分组时，原样输出整个列表（不要添加任何 ### 行）
 - 组间按价值从高到低排列
@@ -475,7 +895,16 @@ def organize_topics(text: str, category_title: str, lang: str = "zh") -> str:
 
 
 def build_consolidate_prompt(results: list[str], category_title: str, incremental: bool, lang: str = "zh") -> str:
-    """一次完成「合并去重 + 分类分组」，省掉「先全量合并、再全量分组」的第二轮调用。"""
+    """一次完成「合并去重 + 分类分组」，省掉「先全量合并、再全量分组」的第二轮调用。
+
+    空输入守卫：见 build_merge_prompt。consolidate 入口已过滤，但任何外部直接调用必须先
+    经过这里。
+
+    评分字段保留：若条目带 `[v=X,d=Y,✓/✗]` 评分字段（仅「产品创意」分类），
+    合并分组时必须原样保留，不得删除或改写。
+    """
+    if not results:
+        raise ValueError("build_consolidate_prompt 需要至少 1 个非空批次结果")
     if lang == "en":
         note = " (this is today's incremental analysis)" if incremental else ""
         body = "\n\n---\n\n".join(results)
@@ -487,6 +916,7 @@ Rules:
 - If items are too few or too scattered to group, output the plain item list (no ### lines)
 - Sort groups and in-group items by value from high to low
 - Keep the trailing ` — [#postID]` marker; do not remove or alter it
+- If an item carries a score tag `[v=X,d=Y,✓/✗]`, keep the tag verbatim; do not edit or drop it
 - Keep descriptions concise: one sentence per item, no more than 60 words
 - Answer in English; even if the original text is in Chinese, output in English
 
@@ -503,6 +933,7 @@ Rules:
 - 条目过少或无法合理分组时，直接输出条目列表（不要添加任何 ### 行）
 - 每组与组内条目均按价值从高到低排列
 - 每条保留描述末尾的 ` — [#帖子ID]` 来源标注，不得删除或改写
+- 若条目带有评分字段 `[v=X,d=Y,✓/✗]`（仅「产品创意」分类），必须原样保留数字与符号，不得删除或改写
 - 描述务必精简：每条一句话、不超过 60 字
 - 一律用中文回答；即使原文是英文，也要用中文输出
 
@@ -599,17 +1030,31 @@ def cleanup_cache(run_id: str) -> None:
 # ---------- 分析主流程 ----------
 
 
-def analyze(topics: list[Post], incremental: bool = False, language: str = "zh") -> dict[str, str]:
+def analyze(
+    topics: list[Post],
+    incremental: bool = False,
+    language: str = "zh",
+    eval_enabled: bool = False,
+    eval_cfg: dict[str, Any] | None = None,
+    print_tokens: bool = True,
+) -> dict[str, str]:
     """分析所有帖子，返回 {类别标题（按语言）: 分组整理后的文本}。
 
     token 优化：每批帖子只调用一次（一次输出全部类别，正文不再按类重复发送），
     每类再各调用一次完成「合并去重 + 分类分组」。
+
+    eval_enabled=True 时，多类 prompt 的「产品创意 / Product Ideas」分类会追加评估打分 + 三档分桶指令
+    （LLM 在生成时按总分阈值前置过滤，省 token）；单类回退路径下，仅对 ideas 分类追加；
+    其余分类不受影响。
+    eval_cfg 缺省时用 _EVALUATION_DEFAULTS 的阈值；只对「产品创意」分类生效。
+    print_tokens=False 时不打印 token 摘要（单测用）。
     """
     cats = _categories(language)
     run_id = hashlib.md5("".join(p.id for p in topics).encode("utf-8")).hexdigest()[:12]
     id2link = {p.id: (p.title, p.url) for p in topics}
     batches = [topics[i : i + BATCH_SIZE] for i in range(0, len(topics), BATCH_SIZE)]
     total_batches = len(batches)
+    eff_eval_cfg = eval_cfg if isinstance(eval_cfg, dict) else _EVALUATION_DEFAULTS
 
     def analyze_batch(bi: int, batch_text: str) -> dict[str, str]:
         """单批一次调用输出全部类别，带 run_id 缓存；输出未按类别分节时回退为按类逐次调用。
@@ -621,12 +1066,33 @@ def analyze(topics: list[Post], incremental: bool = False, language: str = "zh")
         if isinstance(cached, dict) and isinstance(cached.get("result"), dict):
             return cached["result"]
         parsed = parse_multi(
-            call_api(build_multi_prompt(batch_text, bi, total_batches, language), max_tokens=MULTI_MAX_TOKENS),
+            call_api(
+                build_multi_prompt(
+                    batch_text,
+                    bi,
+                    total_batches,
+                    language,
+                    eval_enabled=eval_enabled,
+                    eval_cfg=eff_eval_cfg,
+                ),
+                max_tokens=MULTI_MAX_TOKENS,
+            ),
             language,
         )
         if not any(parsed.values()):
             parsed = {
-                key: call_api(build_batch_prompt(batch_text, bi, total_batches, title, desc, language))
+                key: call_api(
+                    build_batch_prompt(
+                        batch_text,
+                        bi,
+                        total_batches,
+                        title,
+                        desc,
+                        language,
+                        eval_enabled=(eval_enabled and key == _EVAL_CATEGORY_KEY),
+                        eval_cfg=eff_eval_cfg,
+                    )
+                )
                 for key, title, desc in cats
             }
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -658,6 +1124,8 @@ def analyze(topics: list[Post], incremental: bool = False, language: str = "zh")
         result[title] = restore_links(grouped_raw[key], id2link, language)
 
     cleanup_cache(run_id)
+    if print_tokens:
+        print(format_token_usage())
     return result
 
 
@@ -681,8 +1149,20 @@ def load_topics(data_dir: Path, since: int | None = None) -> list[Post]:
     return posts
 
 
-def build_report(merged: dict[str, str], total: int, summary: str, title: str, lang: str = "zh") -> str:
-    """按语言拼装报告：标题 + 来源摘要 + 帖子数 + 各分类小节。"""
+def build_report(
+    merged: dict[str, str],
+    total: int,
+    summary: str,
+    title: str,
+    lang: str = "zh",
+    eval_cfg: dict[str, Any] | None = None,
+) -> str:
+    """按语言拼装报告：标题 + 来源摘要 + 帖子数 + 各分类小节。
+
+    eval_cfg=None 或 eval_cfg["enabled"]=False 时退化为旧行为（所有分类原样输出）。
+    评估启用时，「产品创意 / Product Ideas」分类按总分（价值 × (6-难度)）分桶：
+    保留清单 → 待观察 → 被否决 → 未评分；其余分类原样输出。
+    """
     if lang == "en":
         header = ["Sources: " + summary, "", f"Generated from {total} posts", ""]
         empty_text = "No insights found this round"
@@ -690,9 +1170,25 @@ def build_report(merged: dict[str, str], total: int, summary: str, title: str, l
         header = [f"来源: {summary}", "", f"基于 {total} 个帖子自动生成", ""]
         empty_text = "本轮未发现相关信息"
     lines = [f"# {title}", ""] + header
-    for title, text in merged.items():
-        content = text.strip() or empty_text
-        lines += [f"## {title}", "", content, ""]
+
+    eval_title = None
+    eval_cfg_eff: dict[str, Any] | None = None
+    if eval_cfg and eval_cfg.get("enabled", True):
+        eval_cfg_eff = eval_cfg
+        for key, t, _ in _categories(lang):
+            if key == _EVAL_CATEGORY_KEY:
+                eval_title = t
+                break
+
+    for t, text in merged.items():
+        if eval_title and t == eval_title and text.strip() and eval_cfg_eff is not None:
+            buckets = categorize_items(text, eval_cfg_eff, lang)
+            summary_text = _format_eval_summary(buckets, eval_cfg_eff, lang)
+            bucket_text = _format_eval_buckets(buckets, eval_cfg_eff, lang)
+            lines += [f"## {t}", "", summary_text, "", bucket_text, ""]
+        else:
+            content = text.strip() or empty_text
+            lines += [f"## {t}", "", content, ""]
     return "\n".join(lines)
 
 
@@ -728,7 +1224,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--lang",
         choices=LANGS,
         default=None,
-        help="报告与日志语言（zh/en，默认 ANALYZE_LANG→zh）/ language of report & logs (default ANALYZE_LANG→zh)",
+        help=(
+            "报告与日志语言（zh/en，默认 ANALYZE_LANG → 系统语言 → zh）/ "
+            "language of report & logs (default: ANALYZE_LANG → system language → zh)"
+        ),
     )
     return parser
 
@@ -846,11 +1345,20 @@ def _main(argv: list[str] | None = None) -> int:
 
     summary = ", ".join(f"{name}({', '.join(sorted(nodes))})" for name, nodes in source_nodes.items())
     print(_t(_LANG, "posts_to_analyze", n=len(topics), summary=summary))
-    merged = analyze(topics, incremental=incremental, language=_LANG)
+    eval_cfg = load_evaluation(config)
+    eval_enabled = bool(eval_cfg.get("enabled", True))
+    reset_token_usage()
+    merged = analyze(
+        topics,
+        incremental=incremental,
+        language=_LANG,
+        eval_enabled=eval_enabled,
+        eval_cfg=eval_cfg,
+    )
 
     day = time.strftime("%Y-%m-%d")
     title = day if incremental else _t(_LANG, "full_title", day=day)
-    report = build_report(merged, len(topics), summary, title, _LANG)
+    report = build_report(merged, len(topics), summary, title, _LANG, eval_cfg=eval_cfg)
     write_report(report, incremental=incremental, lang=_LANG)
 
     now = int(time.time())

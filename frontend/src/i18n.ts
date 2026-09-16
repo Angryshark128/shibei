@@ -6,6 +6,16 @@ import { initReactI18next } from "react-i18next";
 
 export type Locale = "zh-CN" | "en-US";
 
+/** 系统语言 → 支持的语言：en* → en-US，其余（含无偏好）→ zh-CN */
+function detectSystemLocale(): Locale {
+  const candidates = [navigator.language, ...(navigator.languages ?? [])];
+  for (const tag of candidates) {
+    if (typeof tag === "string" && tag.toLowerCase().startsWith("en")) return "en-US";
+  }
+  return "zh-CN";
+}
+
+/** 界面语言：用户显式选择优先，否则跟随系统语言 */
 function readSavedLocale(): Locale {
   try {
     const saved = localStorage.getItem(STORAGE_KEYS.locale);
@@ -13,7 +23,7 @@ function readSavedLocale(): Locale {
   } catch {
     // ignore
   }
-  return "zh-CN";
+  return detectSystemLocale();
 }
 
 export const DEFAULT_LOCALE: Locale = readSavedLocale();
@@ -53,6 +63,11 @@ export function setLocale(locale: Locale): void {
 
 export function currentLocale(): Locale {
   return i18n.language?.startsWith("en") ? "en-US" : "zh-CN";
+}
+
+/** 报告语言：跟随界面语言（zh-CN→zh / en-US→en） */
+export function currentReportLang(): "zh" | "en" {
+  return currentLocale() === "en-US" ? "en" : "zh";
 }
 
 export default i18n;

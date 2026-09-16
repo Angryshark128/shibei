@@ -21,12 +21,15 @@ export class ApiError extends Error {
   status: number;
   code: string;
   friendly: boolean;
+  /** 服务端附带的原始错误细节（如 Webhook 接收端返回的 HTTP 状态与响应体） */
+  detail: string;
 
-  constructor(message: string, status: number, code = "", friendly = false) {
+  constructor(message: string, status: number, code = "", friendly = false, detail = "") {
     super(message);
     this.status = status;
     this.code = code;
     this.friendly = friendly;
+    this.detail = detail;
   }
 }
 
@@ -68,8 +71,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new AuthError();
   }
   if (!resp.ok) {
-    const detail = body as { error?: string; message?: string } | null;
-    throw new ApiError(detail?.message || friendlyMessage(null), resp.status, detail?.error || "");
+    const payload = body as { error?: string; message?: string; detail?: string } | null;
+    throw new ApiError(
+      payload?.message || friendlyMessage(null),
+      resp.status,
+      payload?.error || "",
+      false,
+      payload?.detail || "",
+    );
   }
   return body as T;
 }
@@ -139,10 +148,10 @@ export const api = {
   stopTask: (id: string) =>
     request<{ ok: boolean }>(`/tasks/${encodeURIComponent(id)}/stop`, { method: "POST" }),
 
-  run: (mode: "today" | "full") =>
+  run: (mode: "today" | "full", lang: "zh" | "en") =>
     request<RunResponse>("/run", {
       method: "POST",
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode, lang }),
     }),
 
   tasks: () => request<TaskListResponse>("/tasks"),
@@ -167,3 +176,13 @@ export const api = {
 };
 
 export type { TaskItem };
+
+/** 把界面语言同步为服务端「报告语言」，供定时任务（无浏览器上下文）沿用；未登录/失败静默忽略 */
+export async function syncReportLang(lang: "zh" | "en"): Promise<void> {
+  try {
+    const current = await api.reportLang();
+    if (current.lang !== lang) await api.saveReportLang(lang);
+  } catch {
+    // 公开页未登录或网络失败：不影响界面
+  }
+}

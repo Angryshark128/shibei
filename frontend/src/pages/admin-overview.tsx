@@ -9,6 +9,7 @@ import { StatCard } from "@/components/ui/stat-card";
 import { useToast } from "@/components/ui/toast";
 import { PageHeader } from "@/components/layout/page-header";
 import { usePolling } from "@/hooks/usePrefs";
+import { currentReportLang } from "@/i18n";
 import { ApiError, api } from "@/lib/api";
 import type { Summary, TaskItem } from "@/types";
 
@@ -46,7 +47,7 @@ export function AdminOverview() {
   const startRun = useCallback(
     async (m: RunMode) => {
       try {
-        const data = await api.run(m);
+        const data = await api.run(m, currentReportLang());
         runningIdRef.current = data.task.id;
         setRunning(data.task);
         setTriggerMode(m);

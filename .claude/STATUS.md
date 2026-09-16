@@ -1,5 +1,20 @@
 # 拾贝 · 项目状态
 
+## [2026-09-13] 抓取请求量收敛：V2EX 分页参数无效
+
+### 现状
+- **实测：V2EX API v1 分页参数无效**。`/api/topics/show.json?node_name=X&p=N` 的 `p`（含 `page`）取 1/2/3/4、四个节点，返回的都是**逐 id 相同**的 10 条（HTTP 200）。`pages_per_node: 6` 每节点白跑 5 次请求。
+- **已改**：`config.json` 的 v2ex `pages_per_node` 6 → 1，请求数 96 → 16（16 节点）/ 次运行，内容不变；单节点实测 6 页 26.4s → 1 页 0.11s。
+- **已部署到线上（09-13）**：生产权威配置是部署机的 `data/web_config.json`——容器启动时由它反写 `/app/config.json`，analyzer 读的是后者；宿主 `/root/shibei/config.json` 不挂载、改了不生效（镜像里的那份启动即被覆盖）。已改该文件的 v2ex `pages_per_node` 并 `docker restart shibei-web` 重载，健康检查与 `/api/reports` 均 200。但生产 v2ex 当前处于**停用**状态（09-11 设置页关闭，生产实际跑 lobsters / devto / sspai），故本次无即时提速，重新启用时生效。
+- **顺带修好缓存**：命中条件 `len(cached) >= pages * TOPICS_PER_PAGE` 在 6 页时需 30 条，而每节点只有 10 条 → V2EX 今日缓存**从未命中**；改 1 页后同日重跑 0 请求（实测）。
+- **未采纳「按时间提前停止分页」**：三个分页来源前提均不成立（V2EX `p` 无效；Dev.to 页内不按时间序且跨页区间重叠；Lobste.rs 本机网络不可达，且 `hottest` 按分数排序）。详见 DECISIONS。
+- 质量门：pytest 126 绿。本机无 uv / ruff / pyright，未跑静态检查——本次仅改 config.json，无 Python 变更。
+
+### 下一步
+- **V2EX 覆盖率**（本次新发现）：每节点只能取到最新 10 帖，繁忙节点一天新帖可能超过 10 条。补齐需换 V2EX API v2（需用户提供 Personal Access Token）或走节点页面分页，另行评估。
+- 报告增强（P2）；更多来源（Reddit / 即刻）
+- 防爬机制（P2）
+
 ## [2026-09-12] 中英双语（界面 + 报告内容）
 
 ### 现状

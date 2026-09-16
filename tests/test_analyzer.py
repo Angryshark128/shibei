@@ -42,6 +42,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://fake/v1")  # URL 必填
     monkeypatch.setenv("ANALYZE_MODEL", "test-model")  # 模型必填
+    monkeypatch.setenv("ANALYZE_LANG", "zh")  # 语言固定中文，避免断言随宿主机系统语言漂移
     return tmp_path
 
 
@@ -538,14 +539,46 @@ def test_build_organize_prompt_keeps_marker_rule():
 # ---------- 英文报告（--lang en / ANALYZE_LANG=en） ----------
 
 
+def _clear_lang_env(monkeypatch) -> None:
+    """清掉语言相关环境变量与 locale 设置，让默认语言只取决于显式配置。"""
+    for key in ("ANALYZE_LANG", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(analyzer.locale, "getlocale", lambda: (None, None))
+
+
 def test_resolve_lang_priority(monkeypatch):
-    monkeypatch.delenv("ANALYZE_LANG", raising=False)
-    assert analyzer.resolve_lang(None) == "zh"  # 无参默认中文
+    _clear_lang_env(monkeypatch)
+    assert analyzer.resolve_lang(None) == "zh"  # 无配置且无系统语言 → 中文
     assert analyzer.resolve_lang("en") == "en"
     assert analyzer.resolve_lang("fr") == "zh"  # 非法值回落默认
     monkeypatch.setenv("ANALYZE_LANG", "en")
     assert analyzer.resolve_lang(None) == "en"
     assert analyzer.resolve_lang("zh") == "zh"  # --lang 优先于环境变量
+
+
+def test_resolve_lang_follows_system_locale(monkeypatch):
+    """默认语言跟随系统语言：en* → en，其余（含 C/POSIX）→ zh。"""
+    _clear_lang_env(monkeypatch)
+    monkeypatch.setenv("LANG", "en_US.UTF-8")
+    assert analyzer.resolve_lang(None) == "en"
+    monkeypatch.setenv("LC_ALL", "en_GB.UTF-8")
+    monkeypatch.setenv("LANG", "zh_CN.UTF-8")
+    assert analyzer.resolve_lang(None) == "en"  # LC_ALL 优先于 LANG
+    monkeypatch.delenv("LC_ALL")
+    assert analyzer.resolve_lang(None) == "zh"
+    monkeypatch.delenv("LANG")
+    monkeypatch.setenv("LANG", "C")
+    assert analyzer.resolve_lang(None) == "zh"
+    monkeypatch.setenv("ANALYZE_LANG", "zh")
+    monkeypatch.setattr(analyzer.locale, "getlocale", lambda: ("en_US", "UTF-8"))
+    assert analyzer.resolve_lang(None) == "zh"  # ANALYZE_LANG 仍优先于系统语言
+
+
+def test_resolve_lang_falls_back_to_locale_setting(monkeypatch):
+    """环境变量缺失时读 locale.getlocale()（如程序内 setlocale 后）。"""
+    _clear_lang_env(monkeypatch)
+    monkeypatch.setattr(analyzer.locale, "getlocale", lambda: ("en_US", "UTF-8"))
+    assert analyzer.resolve_lang(None) == "en"
 
 
 def test_english_categories_and_prompt():
@@ -555,6 +588,52 @@ def test_english_categories_and_prompt():
         assert f"## {title}" in prompt
     assert "Answer in English" in prompt
     assert "产品创意" not in prompt
+
+
+# ---------- 合并 prompt 空输入守卫 ----------
+
+
+def test_merge_prompt_rejects_empty_results():
+    """空列表会发出空 body prompt 给 LLM，直接拒绝让上层走 empty_text 分支。"""
+    with pytest.raises(ValueError, match="至少 1 个非空批次结果"):
+        analyzer.build_merge_prompt([], incremental=True)
+    with pytest.raises(ValueError, match="至少 1 个非空批次结果"):
+        analyzer.build_merge_prompt([], incremental=False, lang="en")
+
+
+def test_consolidate_prompt_rejects_empty_results():
+    with pytest.raises(ValueError, match="至少 1 个非空批次结果"):
+        analyzer.build_consolidate_prompt([], "产品创意", incremental=True)
+    with pytest.raises(ValueError, match="至少 1 个非空批次结果"):
+        analyzer.build_consolidate_prompt([], "Product Ideas", incremental=False, lang="en")
+
+
+def test_merge_prompt_accepts_non_empty_results():
+    """非空列表（含空字符串元素的边界）仍正常返回 prompt——守卫只挡空列表，不挡含空元素的列表。"""
+    prompt = analyzer.build_merge_prompt(["条目一 — [#1]\n条目二 — [#2]"], incremental=True)
+    assert "条目一 — [#1]" in prompt
+    assert "今日新增" in prompt
+    prompt_en = analyzer.build_merge_prompt(["item — [#1]"], incremental=False, lang="en")
+    assert "item — [#1]" in prompt_en
+    assert "today's incremental" not in prompt_en
+
+
+def test_consolidate_prompt_accepts_non_empty_results():
+    prompt = analyzer.build_consolidate_prompt(["条目 — [#1]"], "产品创意", incremental=True)
+    assert "条目 — [#1]" in prompt
+    assert "产品创意" in prompt
+    prompt_en = analyzer.build_consolidate_prompt(
+        ["item — [#1]"], "Product Ideas", incremental=False, lang="en"
+    )
+    assert "Product Ideas" in prompt_en
+
+
+def test_merge_and_consolidate_normalize_empty_via_entry_filter():
+    """上游入口 consolidate/merge_results 已先过滤空结果，不会把空列表传给 prompt 构造函数。"""
+    # consolidate：results 全是空字符串时被入口过滤后返回 ""，不应触发 prompt 守卫
+    assert analyzer.consolidate(["", "  ", "无"], "产品创意", incremental=True, lang="zh") == ""
+    # merge_results：同样过滤后返回 ""
+    assert analyzer.merge_results(["", "无"], incremental=True, lang="zh") == ""
 
 
 def test_is_empty_result_by_language():
@@ -616,3 +695,499 @@ def test_analyze_english_end_to_end(env, monkeypatch):
     assert set(merged) == {"Product Ideas", "User Pain Points", "Opportunities"}
     assert "[来源]" in merged["Product Ideas"]  # 链接还原仍生效
     assert not list(analyzer.CACHE_DIR.glob("*.json"))  # 分析完清理缓存
+
+
+# ---------- 评估打分（idea-eval 内嵌） ----------
+
+
+def test_load_evaluation_defaults_when_missing():
+    """config 缺 evaluation 段 → 返回默认值。"""
+    cfg = analyzer.load_evaluation({})
+    assert cfg["enabled"] is True
+    assert cfg["keep_threshold"] == 16
+    assert cfg["show_watch"] is True
+    assert cfg["show_rejected"] is True
+
+
+def test_load_evaluation_overrides_from_file():
+    """config 自带 evaluation 段 → 覆盖默认。"""
+    cfg = analyzer.load_evaluation({"evaluation": {"enabled": False, "keep_threshold": 12}})
+    assert cfg["enabled"] is False
+    assert cfg["keep_threshold"] == 12
+    assert cfg["show_watch"] is True  # 未指定 → 默认
+    assert cfg["show_rejected"] is True
+
+
+def test_load_evaluation_ignores_non_dict():
+    """evaluation 段若不是 dict（如字符串/null）→ 用默认值兜底。"""
+    assert analyzer.load_evaluation({"evaluation": "off"})["enabled"] is True
+    assert analyzer.load_evaluation({"evaluation": None})["keep_threshold"] == 16
+
+
+def test_build_batch_prompt_zh_adds_score_rule_when_enabled():
+    prompt = analyzer.build_batch_prompt(
+        "批次", idx=0, total=1, title="产品创意", desc="def", lang="zh", eval_enabled=True
+    )
+    assert "[v=X,d=Y,✓/✗]" in prompt
+    assert "价值" in prompt
+    assert "难度" in prompt
+
+
+def test_build_batch_prompt_en_adds_score_rule_when_enabled():
+    prompt = analyzer.build_batch_prompt(
+        "batch", idx=0, total=1, title="Product Ideas", desc="def", lang="en", eval_enabled=True
+    )
+    assert "[v=X,d=Y,✓/✗]" in prompt
+    assert "value" in prompt
+    assert "difficulty" in prompt
+
+
+def test_build_batch_prompt_omits_score_rule_when_disabled():
+    """eval_enabled=False（默认）→ 不附加评分规则（回归保护）。"""
+    prompt = analyzer.build_batch_prompt("批次", idx=0, total=1, title="产品创意", desc="def")
+    assert "[v=X,d=Y,✓/✗]" not in prompt
+    assert "评分必须给具体数字" not in prompt
+
+
+def test_build_multi_prompt_only_ideas_section_has_score_rule():
+    """多类 prompt 中，仅「产品创意」分类 section 附带评估规则；其他分类不受影响。"""
+    prompt_zh = analyzer.build_multi_prompt("批次", idx=0, total=1, lang="zh", eval_enabled=True)
+    # 找到三个分类的 section 起点
+    ideas_pos = prompt_zh.index("## 产品创意")
+    pain_pos = prompt_zh.index("## 用户痛点")
+    indie_pos = prompt_zh.index("## 潜在机会")
+    ideas_block = prompt_zh[ideas_pos:pain_pos]
+    pain_block = prompt_zh[pain_pos:indie_pos]
+    indie_block = prompt_zh[indie_pos:]
+    assert "[v=X,d=Y,✓/✗]" in ideas_block  # 产品创意含评分规则
+    assert "[v=X,d=Y,✓/✗]" not in pain_block  # 用户痛点不含
+    assert "[v=X,d=Y,✓/✗]" not in indie_block  # 潜在机会不含
+
+
+def test_build_multi_prompt_omits_score_rule_when_disabled():
+    prompt = analyzer.build_multi_prompt("批次", idx=0, total=1, lang="zh")  # eval_enabled 默认 False
+    assert "[v=X,d=Y,✓/✗]" not in prompt
+
+
+def test_parse_item_score_valid():
+    v, d, r, rest = analyzer.parse_item_score("- [v=4,d=2,✓] PII 脱敏 — [#1]")
+    assert v == 4
+    assert d == 2
+    assert r == "✓"
+    assert "PII 脱敏" in rest and "[#" not in rest.split("—")[0]  # 评分字段已被剥离
+
+
+def test_parse_item_score_handles_concern():
+    v, d, r, rest = analyzer.parse_item_score("- [v=3,d=2,✗] 涉合规 — [#2]")
+    assert r == "✗"
+    assert v == 3
+
+
+def test_parse_item_score_invalid_returns_zero():
+    v, d, r, line = analyzer.parse_item_score("- 普通条目，没有评分 — [#1]")
+    assert (v, d, r) == (0, 0, "?")
+    assert line == "- 普通条目，没有评分 — [#1]"
+
+
+def test_categorize_items_splits_keep_watch_rejected():
+    text = (
+        "- [v=4,d=2,✓] 高价值低难度 — [#1]\n"
+        "- [v=5,d=5,✓] 高价值高难度 — [#2]\n"
+        "- [v=2,d=4,✓] 低价值 — [#3]\n"
+        "- [v=3,d=2,✗] 红线命中 — [#4]\n"
+        "- 普通条目无评分 — [#5]\n"
+        "### H3 小节\n"
+        "- 非条目行\n"
+    )
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16})
+    # 总分: [4*4=16, 5*1=5, 2*2=4, 0, 0]
+    assert len(buckets["keep"]) == 1
+    assert len(buckets["watch"]) == 2  # 总分 5 和 4 的两条
+    assert len(buckets["rejected"]) == 1
+    assert len(buckets["unscored"]) == 1
+    # keep 第一条是 16 分
+    assert buckets["keep"][0][0] == 4 and buckets["keep"][0][1] == 2
+    # watch 按总分降序
+    watch_scores = [analyzer._total_score(v, d) for v, d, _, _ in buckets["watch"]]
+    assert watch_scores == sorted(watch_scores, reverse=True)
+    # rejected 不被排序影响但保留
+    assert buckets["rejected"][0][2] == "✗"
+    # unscored 原样保留整行
+    assert "普通条目无评分" in buckets["unscored"][0][3]
+
+
+def test_categorize_items_threshold_boundary():
+    """总分恰好等于阈值 → 进入 keep。"""
+    text = "- [v=4,d=2,✓] 边界 — [#1]"  # 总分 16
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16})
+    assert len(buckets["keep"]) == 1
+    assert len(buckets["watch"]) == 0
+
+
+def test_categorize_items_show_watch_disabled_hides_buckets():
+    """show_watch=False 时，watch 与 unscored 桶都不输出（_format_eval_buckets）。"""
+    text = "- [v=2,d=4,✓] 待观察 — [#1]\n- 无评分 — [#2]"
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16})
+    cfg = {"keep_threshold": 16, "show_watch": False, "show_rejected": True}
+    out = analyzer._format_eval_buckets(buckets, cfg, "zh")
+    assert "保留清单" not in out
+    assert "待观察" not in out  # show_watch=False → 隐藏
+    assert "未评分" not in out  # show_watch=False → 也隐藏
+
+
+def test_categorize_items_show_rejected_disabled_hides_rejected():
+    text = "- [v=4,d=2,✗] 否决 — [#1]"
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16})
+    cfg = {"keep_threshold": 16, "show_watch": True, "show_rejected": False}
+    out = analyzer._format_eval_buckets(buckets, cfg, "zh")
+    assert "被否决" not in out
+
+
+def test_build_report_with_eval_shows_buckets():
+    """传入 eval_cfg → 「产品创意」分类按 4 个桶输出，其他分类原样。
+
+    注：build_report 接收的是 analyze 末尾已经 restore_links 还原过的文本，
+    因此输入已带 [来源](url) 而不是 [#ID]。
+    """
+    merged = {
+        "产品创意": (
+            "- [v=5,d=1,✓] 头条 — [来源](https://x/1)\n"
+            "- [v=2,d=4,✓] 待观察 — [来源](https://x/2)\n"
+            "- [v=3,d=2,✗] 否决 — [来源](https://x/3)"
+        ),
+        "用户痛点": "- 普通痛点 — [来源](https://x/4)",
+    }
+    report = analyzer.build_report(
+        merged, 10, "src(x)", "2026-09-16", "zh",
+        eval_cfg={"enabled": True, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
+    )
+    assert "### 保留清单 (1)" in report
+    assert "### 待观察 (1)" in report
+    assert "### 被否决 (1)" in report
+    assert "### 未评分 (0)" not in report  # 没有未评分条目
+    assert "## 产品创意" in report
+    assert "## 用户痛点" in report
+    assert "- 普通痛点 — [来源](https://x/4)" in report  # 链接还原仍生效（输入已还原）
+
+
+def test_build_report_without_eval_is_legacy():
+    """不传 eval_cfg → 输出与旧格式一致（回归保护）。"""
+    merged = {
+        "产品创意": "- 普通条目 — [来源](https://x/1)",
+        "用户痛点": "- 普通痛点 — [来源](https://x/2)",
+    }
+    report = analyzer.build_report(merged, 5, "src(x)", "2026-09-16", "zh")
+    assert "### 保留清单" not in report
+    assert "### 待观察" not in report
+    assert "本轮" not in report
+    assert "## 产品创意" in report
+    assert "- 普通条目 — [来源](https://x/1)" in report
+
+
+def test_build_report_eval_disabled_via_cfg():
+    """eval_cfg['enabled']=False → 等同旧行为（即便传了 eval_cfg）。"""
+    merged = {"产品创意": "- [v=4,d=2,✓] 条目 — [来源](https://x/1)"}
+    report = analyzer.build_report(
+        merged, 1, "x", "2026-09-16", "zh",
+        eval_cfg={"enabled": False, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
+    )
+    assert "### 保留清单" not in report
+    assert "## 产品创意" in report
+
+
+def test_build_report_eval_english_buckets():
+    """英文报告同样支持分桶输出。"""
+    merged = {
+        "Product Ideas": "- [v=5,d=1,✓] Top — [来源](https://x/1)\n- [v=2,d=4,✓] Watch — [来源](https://x/2)",
+        "User Pain Points": "- Plain pain — [来源](https://x/3)",
+    }
+    report = analyzer.build_report(
+        merged, 5, "src(x)", "2026-09-16", "en",
+        eval_cfg={"enabled": True, "keep_threshold": 16, "show_watch": True, "show_rejected": True},
+    )
+    assert "### Keep (1)" in report
+    assert "### Watch (1)" in report
+    assert "## Product Ideas" in report
+    assert "## User Pain Points" in report
+
+
+def test_analyze_eval_enabled_passes_to_multi_prompt(env, monkeypatch):
+    """eval_enabled=True 时，analyze 给多类 prompt 注入评估规则；回退路径只对 ideas 注入。"""
+    topics = [_post(1)]
+    seen_prompts: list[str] = []
+
+    def fake_call(prompt, **kw):
+        seen_prompts.append(prompt)
+        if "整理" in prompt:
+            return "### A\n- [#1] x"
+        # 多类输出解析失败 → 触发回退路径
+        return "[#1] x"
+
+    monkeypatch.setattr(analyzer, "call_api", fake_call)
+    analyzer.analyze(topics, eval_enabled=True)
+
+    multi_prompts = [p for p in seen_prompts if "一次调用提炼全部类别" in p or "按下面每个类别" in p]
+    assert multi_prompts, "应至少有一次多类 prompt"
+    assert any("[v=X,d=Y,✓/✗]" in p for p in multi_prompts), "多类 prompt 应含评分规则"
+
+    # 回退路径里 ideas 分类的 prompt 含评分规则
+    ideas_fallback = [p for p in seen_prompts if "只提炼「产品创意」" in p]
+    assert ideas_fallback, "应触发回退到单类的产品创意 prompt"
+    assert any("[v=X,d=Y,✓/✗]" in p for p in ideas_fallback)
+
+    # 回退路径里其他分类不含评分规则
+    pain_fallback = [p for p in seen_prompts if "只提炼「用户痛点」" in p]
+    assert pain_fallback, "应触发回退到单类的用户痛点 prompt"
+    assert not any("[v=X,d=Y,✓/✗]" in p for p in pain_fallback), "用户痛点不应含评分规则"
+    indie_fallback = [p for p in seen_prompts if "只提炼「潜在机会」" in p]
+    assert indie_fallback
+    assert not any("[v=X,d=Y,✓/✗]" in p for p in indie_fallback), "潜在机会不应含评分规则"
+
+
+# ---------- 前置过滤：watch_threshold / H3 三档解析 / token 累计 ----------
+
+
+def test_load_evaluation_defaults_watch_threshold():
+    """默认 watch_threshold=12。"""
+    cfg = analyzer.load_evaluation({})
+    assert cfg["keep_threshold"] == 16
+    assert cfg["watch_threshold"] == 12
+    assert cfg["show_watch"] is True
+    assert cfg["show_rejected"] is True
+
+
+def test_load_evaluation_watch_override():
+    cfg = analyzer.load_evaluation({"evaluation": {"watch_threshold": 10}})
+    assert cfg["watch_threshold"] == 10
+    assert cfg["keep_threshold"] == 16  # 未指定沿用默认
+
+
+def test_build_multi_prompt_embeds_thresholds_in_eval_rule():
+    """eval_enabled=True 时，prompt 里含具体阈值（keep/watch）。"""
+    cfg = {"enabled": True, "keep_threshold": 18, "watch_threshold": 10, "show_watch": True, "show_rejected": True}
+    prompt = analyzer.build_multi_prompt("批次", idx=0, total=1, lang="zh", eval_enabled=True, eval_cfg=cfg)
+    ideas_block = prompt[prompt.index("## 产品创意") : prompt.index("## 用户痛点")]
+    assert "≥ 18" in ideas_block
+    assert "[10, 18)" in ideas_block
+    assert "< 10" in ideas_block
+
+
+def test_build_batch_prompt_eval_enabled_uses_eval_cfg_thresholds():
+    cfg = {"enabled": True, "keep_threshold": 20, "watch_threshold": 8}
+    prompt = analyzer.build_batch_prompt(
+        "batch", idx=0, total=1, title="产品创意", desc="def", lang="zh", eval_enabled=True, eval_cfg=cfg
+    )
+    assert "≥ 20" in prompt
+    assert "[8, 20)" in prompt
+
+
+def test_parse_eval_h3_sections_zh_basic():
+    text = (
+        "### 保留 (16+)\n"
+        "- [v=4,d=2,✓] 高价值 — [#1]\n"
+        "- [v=5,d=1,✓] 更高 — [#2]\n"
+        "### 待观察 (12-15)\n"
+        "- [v=3,d=3,✓] 中等 — [#3]\n"
+        "### 被否决\n"
+        "- [v=4,d=2,✗] 红线 — [#4]\n"
+    )
+    sections = analyzer.parse_eval_h3_sections(text, "zh")
+    assert sections is not None
+    assert len(sections["keep"]) == 2
+    assert len(sections["watch"]) == 1
+    assert len(sections["rejected"]) == 1
+    assert "高价值" in sections["keep"][0]
+
+
+def test_parse_eval_h3_sections_en_basic():
+    text = (
+        "### Keep (16+)\n"
+        "- [v=4,d=2,✓] Hi — [#1]\n"
+        "### Watch (12-15)\n"
+        "- [v=3,d=3,✓] Med — [#2]\n"
+        "### Rejected\n"
+        "- [v=3,d=2,✗] No — [#3]\n"
+    )
+    sections = analyzer.parse_eval_h3_sections(text, "en")
+    assert sections is not None
+    assert len(sections["keep"]) == 1
+    assert len(sections["watch"]) == 1
+    assert len(sections["rejected"]) == 1
+
+
+def test_parse_eval_h3_sections_no_match_returns_none():
+    """没有 H3 → 返回 None（调用方应回退到评分字段解析）。"""
+    text = "- [v=4,d=2,✓] 没分桶 — [#1]"
+    assert analyzer.parse_eval_h3_sections(text, "zh") is None
+
+
+def test_parse_eval_h3_sections_handles_threshold_suffix_variants():
+    """兼容 (16+) / (12-15) / (≥16) 等阈值说明后缀的差异。"""
+    text1 = "### 保留（16+）\n- a — [#1]\n"
+    text2 = "### 保留\n- a — [#1]\n"
+    assert analyzer.parse_eval_h3_sections(text1, "zh") is not None
+    assert analyzer.parse_eval_h3_sections(text2, "zh") is not None
+
+
+def test_categorize_items_h3_path_takes_priority():
+    """H3 路径优先于评分字段路径——LLM 直接分桶时按 H3 走。"""
+    text = (
+        "### 保留 (16+)\n"
+        "- [v=5,d=1,✓] 头等 — [#1]\n"
+        "- [v=3,d=3,✓] 边界（12+） — [#2]\n"  # 总分=9 但 LLM 放进保留
+        "### 待观察 (12-15)\n"
+        "- [v=4,d=1,✓] 误放 — [#3]\n"  # 总分=20 但 LLM 放进待观察
+    )
+    buckets = analyzer.categorize_items(
+        text, {"keep_threshold": 16, "watch_threshold": 12, "show_watch": True, "show_rejected": True}, "zh"
+    )
+    # 总分校正：#2(9) 应从 keep 移到 watch；#3(20) 应从 watch 移到 keep
+    keep_ids = {line.split("[#")[1].rstrip("]") for _, _, _, line in buckets["keep"]}
+    watch_ids = {line.split("[#")[1].rstrip("]") for _, _, _, line in buckets["watch"]}
+    assert "1" in keep_ids
+    assert "2" in watch_ids  # 总分 < 阈值 → 校正到 watch
+    assert "3" in keep_ids  # 总分 ≥ 阈值 → 校正到 keep
+
+
+def test_categorize_items_h3_path_no_h3_falls_back_to_score_field():
+    """没 H3 → 回退到评分字段解析（旧行为）。"""
+    text = "- [v=4,d=2,✓] 普通 — [#1]\n- 无评分 — [#2]"
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16, "watch_threshold": 12}, "zh")
+    assert len(buckets["keep"]) == 1
+    assert len(buckets["unscored"]) == 1
+
+
+def test_categorize_items_watch_threshold_filters_to_watch():
+    """watch_threshold=10 时，总分 12..15 之间进 watch（与 keep_threshold=16 配合）。"""
+    text = "- [v=3,d=3,✓] 中等 — [#1]"  # 总分=9
+    buckets = analyzer.categorize_items(text, {"keep_threshold": 16, "watch_threshold": 10}, "zh")
+    # H3 不存在 → 走评分字段路径
+    assert len(buckets["keep"]) == 0
+    assert len(buckets["watch"]) == 1
+    assert len(buckets["unscored"]) == 0
+
+
+def test_build_report_h3_text_renders_buckets():
+    """LLM 直接按 H3 输出时，build_report 正确分桶呈现。"""
+    merged = {
+        "产品创意": (
+            "### 保留 (16+)\n"
+            "- [v=5,d=1,✓] 头条 — [来源](https://x/1)\n"
+            "### 待观察 (12-15)\n"
+            "- [v=3,d=3,✓] 中等 — [来源](https://x/2)\n"
+            "### 被否决\n"
+            "- [v=3,d=2,✗] 红线 — [来源](https://x/3)\n"
+        ),
+    }
+    eval_cfg = {
+        "enabled": True,
+        "keep_threshold": 16,
+        "watch_threshold": 12,
+        "show_watch": True,
+        "show_rejected": True,
+    }
+    report = analyzer.build_report(merged, 10, "src(x)", "2026-09-16", "zh", eval_cfg=eval_cfg)
+    assert "### 保留清单 (1)" in report
+    assert "### 待观察 (1)" in report
+    assert "### 被否决 (1)" in report
+
+
+def test_token_usage_tracks_across_calls(env, monkeypatch):
+    """call_api 从服务端 usage 累计 token；服务未返回则不计入。"""
+    analyzer.reset_token_usage()
+    fake_call = lambda prompt, **kw: "ok"  # noqa: E731
+    monkeypatch.setattr(analyzer, "call_api", fake_call)
+    # 跳过真实 LLM 调用，直接验证 token 累加逻辑
+    analyzer._TOKEN_USAGE["prompt"] += 100
+    analyzer._TOKEN_USAGE["completion"] += 50
+    analyzer._TOKEN_USAGE["total"] += 150
+    analyzer._TOKEN_USAGE["calls"] += 1
+    snap = analyzer.token_usage_snapshot()
+    assert snap["prompt"] == 100
+    assert snap["completion"] == 50
+    assert snap["total"] == 150
+    assert snap["calls"] == 1
+
+
+def test_format_token_usage_no_usage():
+    analyzer.reset_token_usage()
+    assert "服务端未返回 usage" in analyzer.format_token_usage()
+
+
+def test_format_token_usage_with_counts():
+    analyzer.reset_token_usage()
+    analyzer._TOKEN_USAGE.update({"prompt": 200, "completion": 100, "total": 300, "calls": 3})
+    out = analyzer.format_token_usage()
+    assert "prompt=200" in out
+    assert "completion=100" in out
+    assert "total=300" in out
+    assert "3 次调用" in out
+
+
+def test_call_api_accumulates_token_from_response(monkeypatch):
+    """服务端 usage 正确累加到 _TOKEN_USAGE。"""
+    analyzer.reset_token_usage()
+    monkeypatch.setattr(analyzer, "_LLM", {"base_url": "http://fake/v1", "model": "m", "max_tokens": "4096"})
+
+    response_body = json.dumps(
+        {
+            "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 12, "completion_tokens": 34, "total_tokens": 46},
+        }
+    ).encode()
+
+    class FakeResp:
+        def __init__(self, body):
+            self._body = body
+
+        def read(self):
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, **kw):
+        return FakeResp(response_body)
+
+    monkeypatch.setattr(analyzer.urllib.request, "urlopen", fake_urlopen)
+    text = analyzer.call_api("hi", retries=0)
+    assert text == "ok"
+    snap = analyzer.token_usage_snapshot()
+    assert snap["prompt"] == 12
+    assert snap["completion"] == 34
+    assert snap["total"] == 46
+    assert snap["calls"] == 1
+
+
+def test_analyze_prints_token_summary(env, monkeypatch, capsys):
+    """analyze 结束时打印 token 摘要（print_tokens=True 默认）。"""
+    topics = [_post(1)]
+
+    def fake_call(prompt, **kw):
+        # 多类输出解析成功 → 不走回退
+        return "## 产品创意\n- [#1] 创意\n## 用户痛点\n无\n## 潜在机会\n无"
+
+    def fake_consolidate(results, category_title, incremental, lang):
+        # 跳过真实 LLM 调用
+        return "### 组\n- [#1] x" if results else ""
+
+    monkeypatch.setattr(analyzer, "call_api", fake_call)
+    monkeypatch.setattr(analyzer, "consolidate", fake_consolidate)
+
+    analyzer.reset_token_usage()
+    analyzer._TOKEN_USAGE.update({"prompt": 10, "completion": 5, "total": 15, "calls": 1})
+    analyzer.analyze(topics, print_tokens=True)
+    captured = capsys.readouterr()
+    assert "token:" in captured.out
+
+
+def test_analyze_no_token_print_when_disabled(env, monkeypatch, capsys):
+    topics = [_post(1)]
+    monkeypatch.setattr(analyzer, "call_api", lambda prompt, **kw: "[#1] x")
+    monkeypatch.setattr(analyzer, "consolidate", lambda *a, **kw: "")
+    analyzer.analyze(topics, print_tokens=False)
+    captured = capsys.readouterr()
+    assert "token:" not in captured.out

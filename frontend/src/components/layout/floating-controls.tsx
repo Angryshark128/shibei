@@ -5,7 +5,7 @@ import { ConfirmDialog } from "@/components/ui/confirm";
 import { useToast } from "@/components/ui/toast";
 import { THEMES, type ThemeId } from "@/config/theme";
 import { useTheme } from "@/hooks/useTheme";
-import { api } from "@/lib/api";
+import { api, syncReportLang } from "@/lib/api";
 import { currentLocale, setLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -85,7 +85,7 @@ export function FloatingControls({ onLoggedOut, showLogout = true }: FloatingCon
   const toggleLanguage = () => {
     const next = locale === "en-US" ? "zh-CN" : "en-US";
     setLocale(next);
-    void api.saveReportLang(next === "en-US" ? "en" : "zh").catch(() => undefined);
+    void syncReportLang(next === "en-US" ? "en" : "zh");
   };
 
   const handleLogout = async () => {
