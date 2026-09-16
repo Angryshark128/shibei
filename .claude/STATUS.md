@@ -1,5 +1,21 @@
 # 拾贝 · 项目状态
 
+## [2026-09-16] 创意评估打分 + tag 触发部署（v0.5.0）
+
+### 现状
+- **创意评估打分**：分析阶段对每条创意 / 痛点 / 机会逐条评分并给出概括评价，报告只输出评估后的结果，不再直接抛原始条目。
+- **前置过滤省 token**：按总分阈值分档（高质保留 / 中间档标注观察 / 低质不再输出），低质条目在模型输出阶段即被拦下；逐批累计 token 并在分析结束时打印摘要。
+- **部署自动化（本次新增）**：`.github/workflows/deploy.yml`——打 `v*` tag（或手动 `workflow_dispatch`）→ runner rsync 源码到 sh 主机 `/root/shibei` → sh 本地 `docker compose up -d --build`。不推送镜像（sh 拉不动官方源），与 acme-cron 同模式。
+- **数据保护**：rsync 排除 `.env` / `data/` / `.v2ex-grey-backup` 等。已逐文件核对服务器与仓库差异——服务器独有文件**只有 `.env`**（在排除列表内），`data/` 不被触碰，不重置数据。
+- **凭据约定**：复用本机统一命名 `HOST_SH_IP` / `HOST_SH_USER`（Variables）+ `HOST_SH_SSH_KEY`（Secrets，base64 私钥），与 acme-cron / tj-quant 同名。**注意：GitHub secrets 是仓库级的，值不可读也不可跨仓库共享，shibei 仓库需单独配置一次。**
+- **当前阻塞**：shibei 部署未跑通——Deploy #1 在「配置 SSH」6 秒失败，根因是 `HOST_SH_IP` 为空（`ssh-keyscan -H ""` 退出码 1，已复现）。配置好三项凭据后重打 tag 即可。
+- **CI 修绿**：`ruff format --check` 此前失败（analyzer.py 函数签名换行漂移），已 `ruff format` 修正（`d86b8de`，CI 已通过）。
+- 质量门：pytest 178 绿、`ruff format --check` / `ruff check` 0 错。
+
+### 下一步
+- 在 shibei 仓库 Settings → Secrets and variables → Actions 补齐三项凭据后重跑部署
+- 其余见下条（09-13 遗留的 V2EX 覆盖率等）
+
 ## [2026-09-13] 抓取请求量收敛：V2EX 分页参数无效
 
 ### 现状
