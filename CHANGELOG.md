@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.1] - 2026-09-18
+
+修复 v0.6.0 引入的部署回归：nginx 镜像构建时前缀写死为 `/shibei/`，而生产是根路径部署，导致线上 404。生产构建改用 `NGINX_PREFIX=/`（走 nginx-root.conf 直通）。
+
+### 修复
+
+- nginx 镜像前缀：CI 构建改用 `NGINX_PREFIX=/`（本地开发仍默认 `/shibei/`）。
+
 ## [0.6.0] - 2026-09-18
 
 部署架构迁移到统一的 app-deploy 入口（无用户可见功能变化）。

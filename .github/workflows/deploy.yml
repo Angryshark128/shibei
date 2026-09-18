@@ -78,8 +78,10 @@ jobs:
           file: docker/nginx.Dockerfile
           push: true
           tags: ghcr.io/hancic128/shibei-nginx:${{ github.ref_name }}
+          # 生产为根路径部署（shibei.hancic.site，前缀 2026-09-09 已去除）。
+          # NGINX_PREFIX=/ -> nginx-root.conf 直通；本地开发用 docker-compose.local.yml（默认 /shibei/）。
           build-args: |
-            NGINX_PREFIX=/shibei/
+            NGINX_PREFIX=/
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
