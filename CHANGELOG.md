@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.0] - 2026-09-18
+
+部署架构迁移到统一的 app-deploy 入口（无用户可见功能变化）。
+
+### 变更
+
+- **部署链路迁移**：业务仓库只推镜像到 ghcr；镜像分发到阿里云 ACR 与目标主机部署由 app-deploy 仓库统一执行。原腾讯云 TCR 与 Docker Hub 推送废弃。
+- **版本变量统一**：`SHIBEI_VERSION` / `SHIBEI_TAG` 合并为 `TAG`（由 CI 按 git tag 名注入）。
+- `/api/version` 返回值来源改为镜像构建时的 `TAG`（原 `VERSION`）。
+- 仓库路径随 GitHub 账号更名：`Angryshark128/*` → `hancic128/*`。
+
+### 新增
+
+- `docker-compose.local.yml`：本地开发用 compose override（从源码构建）。
+
+### 移除
+
+- `.github/workflows/deploy.yml` 中的自建 SSH 部署、健康检查、版本比对、TCR 临时密码生成等步骤（迁移至 app-deploy）。
+- 腾讯云 / Docker Hub 相关 secrets 依赖。
+
 ## [0.5.0] - 2026-09-16
 
 报告支持中英双语切换；分析阶段对每条创意逐项评估打分，低质条目在生成时即被过滤，报告只保留评估后的结果。
