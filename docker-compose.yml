@@ -8,7 +8,7 @@
 
 services:
   web:
-    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/shibei/shibei:${TAG:-latest}
+    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/hancic128/shibei:${TAG:-latest}
     container_name: shibei-web
     restart: unless-stopped
     deploy:
@@ -34,7 +34,7 @@ services:
       retries: 3
 
   nginx:
-    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/shibei/shibei-nginx:${TAG:-latest}
+    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/hancic128/shibei-nginx:${TAG:-latest}
     container_name: shibei-nginx
     restart: unless-stopped
     deploy:
