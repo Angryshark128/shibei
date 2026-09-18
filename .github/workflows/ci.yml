@@ -1,9 +1,10 @@
 name: CI
 
+# 只手动触发，不随 push / PR 自动跑（节省 Actions 额度）。
+# 发版时的完整测试由 deploy.yml 的 test job 覆盖（打 v* tag 触发）。
+# 需要多版本矩阵验证时，在 Actions 页面手动 Run workflow。
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
