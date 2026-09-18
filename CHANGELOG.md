@@ -2,6 +2,14 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.6.2] - 2026-09-18
+
+修复 v0.6.1 遗留的白屏：前端资源 base 仍为构建期默认 `/shibei/`，根路径部署下 HTML 引用 `/shibei/assets/*` 被 nginx SPA fallback 成 HTML（MIME 错），页面无法加载。
+
+### 修复
+
+- 前端构建 `VITE_BASE` 改用 `/`（与 nginx 前缀、后端 `SHIBEI_BASE_PATH` 三者一致）。
+
 ## [0.6.1] - 2026-09-18
 
 修复 v0.6.0 引入的部署回归：nginx 镜像构建时前缀写死为 `/shibei/`，而生产是根路径部署，导致线上 404。生产构建改用 `NGINX_PREFIX=/`（走 nginx-root.conf 直通）。

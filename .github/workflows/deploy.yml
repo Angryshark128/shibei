@@ -64,9 +64,12 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/hancic128/shibei:${{ github.ref_name }}
+          # 生产为根路径部署：前端资源 base 必须是 /，否则 HTML 引用
+          # /shibei/assets/* 会被 nginx SPA fallback 成 HTML（MIME 错），页面白屏。
+          # 本地开发用 docker-compose.local.yml（默认 /shibei/）。
           build-args: |
             TAG=${{ github.ref_name }}
-            VITE_BASE=/shibei/
+            VITE_BASE=/
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
