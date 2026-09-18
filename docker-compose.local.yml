@@ -1,0 +1,21 @@
+# 拾贝 · 本地开发 compose override
+# 用法：docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+# 覆盖 image 行为 build，从本地 Dockerfile 构建（生产部署走 ACR 预构建镜像）
+
+services:
+  web:
+    image: shibei:${TAG:-local}
+    build:
+      context: .
+      args:
+        VITE_BASE: ${SHIBEI_BASE_PATH:-/shibei/}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
+        TAG: ${TAG:-local}
+
+  nginx:
+    image: shibei-nginx:${TAG:-local}
+    build:
+      context: .
+      dockerfile: docker/nginx.Dockerfile
+      args:
+        NGINX_PREFIX: ${SHIBEI_BASE_PATH:-/shibei/}

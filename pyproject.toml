@@ -26,10 +26,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Angryshark128/shibei"
-Repository = "https://github.com/Angryshark128/shibei"
-Documentation = "https://github.com/Angryshark128/shibei#readme"
-Changelog = "https://github.com/Angryshark128/shibei/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/hancic128/shibei"
+Repository = "https://github.com/hancic128/shibei"
+Documentation = "https://github.com/hancic128/shibei#readme"
+Changelog = "https://github.com/hancic128/shibei/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 dev = [

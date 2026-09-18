@@ -62,6 +62,7 @@ WEB_CONFIG_FILE = DATA_DIR / "web_config.json"
 SECRETS_FILE = DATA_DIR / "web_secrets.json"
 SECRET_KEY_FILE = DATA_DIR / ".secret_key"
 STATIC_DIR = REPO_ROOT / "static"
+VERSION_FILE = REPO_ROOT / "VERSION"
 
 # 报告文件命名：每日归档 YYYY-MM-DD.md（增量，每天一份）+ analysis.md（全量总览）；
 # 英文报告在基名后加 .en 后缀（analysis.en.md / YYYY-MM-DD.en.md），zh 无后缀向后兼容。
@@ -718,6 +719,16 @@ def create_app() -> Flask:
     @require_login
     def summary() -> Any:
         return jsonify({"summary": _summary(config, secrets_store)})
+
+    # ---------- 版本号（部署验证用：deploy.yml 末步 curl 此接口与 tag 比对） ----------
+
+    @app.get("/api/version")
+    def version() -> Any:
+        try:
+            v = VERSION_FILE.read_text(encoding="utf-8").strip()
+        except OSError:
+            v = ""
+        return jsonify({"version": v})
 
     # ---------- favicon（favicon.ico / favicon.svg 随前端构建产物拷贝到 static 根） ----------
 

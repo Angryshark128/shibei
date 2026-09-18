@@ -1,16 +1,14 @@
-# 拾贝 · Docker Compose（子路径前缀参数化）
+# 拾贝 · Docker Compose（app-deploy 部署入口）
 # 子路径前缀由 SHIBEI_BASE_PATH 控制（默认 /shibei/；如部署为 https://host/apps/shibei/ 则设 /apps/shibei/）。
-# 镜像 tag 由 SHIBEI_TAG 控制（默认 local；多前缀并存时用不同 tag 隔离，如 apps）。
+# 镜像 tag 由 TAG 控制（默认 latest；app-deploy 在 deploy 时按 git tag 名注入；本地构建可手动设）。
 # pip 源由 PIP_INDEX_URL 控制（默认官方 PyPI；国内主机可设腾讯云/清华镜像）。
+#
+# 生产部署：image 名 = 阿里云 ACR 地址（crpi-.../shibei/shibei:<TAG>）。
+# 本地构建：把 image 行改回 `build:` + `shibei:${TAG}`，或者用 docker-compose.local.yml 覆盖。
 
 services:
   web:
-    build:
-      context: .
-      args:
-        VITE_BASE: ${SHIBEI_BASE_PATH:-/shibei/}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
-    image: shibei:${SHIBEI_TAG:-local}
+    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/shibei/shibei:${TAG:-latest}
     container_name: shibei-web
     restart: unless-stopped
     deploy:
@@ -36,12 +34,7 @@ services:
       retries: 3
 
   nginx:
-    build:
-      context: .
-      dockerfile: docker/nginx.Dockerfile
-      args:
-        NGINX_PREFIX: ${SHIBEI_BASE_PATH:-/shibei/}
-    image: shibei-nginx:${SHIBEI_TAG:-local}
+    image: crpi-eojnonduynx61h32.cn-beijing.personal.cr.aliyuncs.com/shibei/shibei-nginx:${TAG:-latest}
     container_name: shibei-nginx
     restart: unless-stopped
     deploy:

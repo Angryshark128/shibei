@@ -13,10 +13,15 @@ RUN npm run build
 FROM python:3.12-slim
 # 国内主机可传 PIP_INDEX_URL（如腾讯云镜像）绕开 PyPI 连通性差的问题
 ARG PIP_INDEX_URL=https://pypi.org/simple
+# 镜像 tag（git tag，如 v0.5.0）；由 app-deploy 在 docker compose up 时注入到容器 TAG env
+# 写入镜像根的 VERSION 文件，web/app.py 通过 /api/version 暴露
+ARG TAG=latest
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     SHIBEI_PORT=8000 \
-    SHIBEI_BASE_PATH=/shibei/
+    SHIBEI_BASE_PATH=/shibei/ \
+    TAG=${TAG}
+RUN echo "${TAG}" > /app/VERSION
 COPY web/ /app/web/
 COPY analyzer.py crawler.py models.py config.json ./
 COPY sources/ /app/sources/

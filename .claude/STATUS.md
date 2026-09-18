@@ -119,7 +119,7 @@
 ### 现状
 - **定位**：面向独立开发者的社区情报工具（README / design / pyproject 已统一）。
 - **环境声明**：README 新增「环境要求」（Python 3.10+ 零运行时依赖 / uv 仅开发 / 网络与 LLM 配置要求）。
-- **已发布**：GitHub 仓库 `Angryshark128/shibei`（Public），main 分支已推送，tag `v0.1.0`。
+- **已发布**：GitHub 仓库 `hancic128/shibei`（Public），main 分支已推送，tag `v0.1.0`。
 - 注：本环境 github.com HTTPS 不通，push 走 SSH over 443（`ssh.github.com:443`）。
 - 45 测试 / ruff / pyright 全绿；pre-commit 钩子全过。
 

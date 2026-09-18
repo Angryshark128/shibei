@@ -1,74 +1,94 @@
 name: Deploy
 
-# 打 tag（v*）或手动触发时部署到 sh 主机：runner rsync 源码 → sh 本地 docker compose 构建并重启。
-# sh（国内）访问 GitHub / Docker Hub 官方源受限，故不推送镜像，改由 sh 本地构建。
+# shibei 业务仓库 CI/CD（2026-09-18 改造为新规范）：
+#   - 业务仓库只推镜像到 ghcr（零 registry secret、零 SSH key）
+#   - 部署动作（镜像分发 + SSH 部署）由 app-deploy 仓库执行
+#   - 详细规则见 Trilium 笔记《部署规范》(noteId mqVosQPy9Cve)
 #
-# 复用本机统一主机凭据（与 acme-cron / tj-quant 等同名）：
-#   Variables: HOST_SH_IP=172.81.241.149、HOST_SH_USER=root
-#   Secrets:   HOST_SH_SSH_KEY（部署私钥 base64，公钥在 sh root 的 authorized_keys）
+# 触发：仅打 v* tag（如 v0.5.0）；其他 push 不触发构建
+# 流程：test → build + push ghcr → repository_dispatch 触发 app-deploy
 #
-# 部署目录 /root/shibei：.env 与 data/（每日报告归档、抓取数据、web_secrets 凭据）
-# 只存在于服务器，rsync 一并排除，不随部署覆盖。
+# 注意：app-deploy 私有仓库触发需 PAT，存为 secret APP_DEPLOY_DISPATCH_TOKEN
+#（在 hancic128 GitHub Settings → Developer settings → PAT，仅授权 app-deploy 单仓库）
+
 on:
   push:
     tags: ['v*']
-  workflow_dispatch:
 
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
-  deploy-sh:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run pyright .
+      - run: uv run pytest -q
+
+  build-and-push:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
-      - name: 配置 SSH
-        env:
-          SSH_KEY: ${{ secrets.HOST_SH_SSH_KEY }}
-          HOST: ${{ vars.HOST_SH_IP }}
-        run: |
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          echo "$SSH_KEY" | base64 -d > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: 同步代码
-        env:
-          HOST: ${{ vars.HOST_SH_IP }}
-          USER: ${{ vars.HOST_SH_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "$USER@$HOST" "mkdir -p /root/shibei"
-          rsync -az --delete -e 'ssh -i ~/.ssh/deploy_key' \
-            ./ "$USER@$HOST:/root/shibei/" \
-            --exclude '.git' --exclude '.github' \
-            --exclude '.env' --exclude 'data/' \
-            --exclude '.venv' --exclude '.pylibs' \
-            --exclude '__pycache__' --exclude '.pytest_cache' --exclude '.ruff_cache' \
-            --exclude 'frontend/node_modules' --exclude 'frontend/dist' \
-            --exclude '.v2ex-grey-backup' --exclude '*.log'
+      - name: Login ghcr
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 部署（sh 本地构建镜像 + compose up）
-        env:
-          HOST: ${{ vars.HOST_SH_IP }}
-          USER: ${{ vars.HOST_SH_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "$USER@$HOST" '
-            set -e
-            cd /root/shibei
-            docker compose up -d --build --remove-orphans
-            sleep 8
-            docker compose ps'
+      - name: Build & push shibei (web) to ghcr
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/hancic128/shibei:${{ github.ref_name }}
+          build-args: |
+            TAG=${{ github.ref_name }}
+            VITE_BASE=/shibei/
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: 验证
-        env:
-          HOST: ${{ vars.HOST_SH_IP }}
-          USER: ${{ vars.HOST_SH_USER }}
-        run: |
-          ssh -i ~/.ssh/deploy_key "$USER@$HOST" '
-            for i in 1 2 3 4 5; do
-              curl -sf -o /dev/null http://127.0.0.1:18080/ && echo "服务 OK" && exit 0
-              sleep 3
-            done
-            echo "服务未就绪"; exit 1'
+      - name: Build & push shibei (nginx) to ghcr
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/nginx.Dockerfile
+          push: true
+          tags: ghcr.io/hancic128/shibei-nginx:${{ github.ref_name }}
+          build-args: |
+            NGINX_PREFIX=/shibei/
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trigger app-deploy
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.APP_DEPLOY_DISPATCH_TOKEN }}
+          repository: hancic128/app-deploy
+          event-type: deploy
+          client-payload: '{"app":"shibei","tag":"${{ github.ref_name }}"}'
+
+  # 旧版本曾用 deploy job 自建 SSH 部署（host：sh、TCR 临时密码生成、健康检查、版本比对）。
+  # 2026-09-18 起全部迁移到 app-deploy 仓库；本 workflow 仅负责镜像构建 + 触发。
+  # 如需回滚到旧部署模式，参考 git log 中 deploy.yml@v0.5.0 及之前的版本。
