@@ -21,6 +21,9 @@ concurrency:
 
 permissions:
   contents: read
+  # 推送镜像到 ghcr 需要 packages: write（缺此项会报
+  # "installation not allowed to Create organization package"）
+  packages: write
 
 jobs:
   test:
